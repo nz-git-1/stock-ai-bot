@@ -38,8 +38,8 @@ prompt = f"""
 {raw_data}
 """
 
-# 3. 구글 AI 서버와 통신
-ai_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+# 3. 구글 AI 서버와 통신 (에러가 나던 이름표를 gemini-pro로 완벽히 수정함)
+ai_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={GEMINI_API_KEY}"
 headers = {'Content-Type': 'application/json'}
 payload = {
     "contents": [{"parts": [{"text": prompt}]}]
