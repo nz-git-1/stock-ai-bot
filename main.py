@@ -7,7 +7,7 @@ TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
-# 2. 분석할 주식 티커 (여기에 원하시는 종목 영문 이름을 넣으시면 됩니다)
+# 2. 분석할 주식 티커
 TICKERS = ["AAPL", "NVDA", "TSLA"]
 
 def get_stock_data():
@@ -30,7 +30,7 @@ def get_stock_data():
 
 raw_data = get_stock_data()
 
-# ★ 여기가 핵심! 초보자 맞춤형 + 100% 한글 강제 명령서 ★
+# 3. 초보자 맞춤형 + 100% 한글 강제 명령서
 prompt = f"""
 너는 주식을 처음 시작하는 왕초보에게 친절하게 설명해주는 주식 전문가야. 
 반드시 처음부터 끝까지 '한국어(Korean)'로만 대답해. 절대 영어를 쓰지 마.
@@ -49,7 +49,7 @@ payload = {"contents": [{"parts": [{"text": prompt}]}]}
 ai_analysis = "사용 가능한 모델을 찾지 못했습니다."
 
 try:
-    # 3. 구글에 있는 '모든 AI 모델' 목록 가져오기
+    # 4. 구글에 있는 '모든 AI 모델' 목록 가져오기
     list_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={GEMINI_API_KEY}"
     list_res = requests.get(list_url).json()
     
@@ -59,13 +59,12 @@ try:
             if "generateContent" in m.get("supportedGenerationMethods", []):
                 valid_models.append(m["name"].split("/")[-1])
     
-    # 4. 목록의 모델들을 하나씩 찔러보며 성공할 때까지 무한 도전
+    # 5. 목록의 모델들을 하나씩 찔러보며 성공할 때까지 무한 도전
     for model_name in valid_models:
         ai_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
         res = requests.post(ai_url, headers=headers, json=payload)
         res_json = res.json()
         
-        # 분석 결과를 제대로 뱉어내면 즉시 채택하고 루프 종료!
         if "candidates" in res_json:
             ai_analysis = f"(사용된 모델: {model_name})\n\n" + res_json['candidates'][0]['content']['parts'][0]['text']
             break 
@@ -75,7 +74,16 @@ try:
 except Exception as e:
     ai_analysis = f"통신 오류 발생: {e}"
 
-# 5. 텔레그램으로 전송
+# 6. 텔레그램으로 전송 및 오류 추적기
 final_message = f"📊 [오늘의 주식 지표]\n{raw_data}\n\n🤖 [AI 분석 의견]\n{ai_analysis}"
+
+# 글자 수가 4000자를 넘어가면 텔레그램에서 튕기므로 안전하게 자르기
+if len(final_message) > 4000:
+    final_message = final_message[:3900] + "\n\n(※ AI의 분석이 너무 길어 일부 생략되었습니다.)"
+
 url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-requests.post(url, data={"chat_id": CHAT_ID, "text": final_message})
+telegram_res = requests.post(url, data={"chat_id": CHAT_ID, "text": final_message})
+
+# 텔레그램이 반송했을 경우 강제로 에러(빨간 엑스) 발생시키기
+if telegram_res.status_code != 200:
+    raise Exception(f"텔레그램 전송 실패! 상세 에러: {telegram_res.text}")
