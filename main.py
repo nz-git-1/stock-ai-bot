@@ -19,10 +19,9 @@ try:
 except FileNotFoundError:
     TICKERS = ["AAPL"]
 
-# 3. 구글 AI 모델 시도 순서 (가장 빠르고 똑똑한 최신 모델부터 시도)
 BEST_MODELS = ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-pro"]
 
-# 4. 종목별 개별 분석 시작
+# 3. 종목별 개별 분석 시작
 for ticker in TICKERS:
     try:
         # 야후 파이낸스 데이터 가져오기
@@ -30,9 +29,7 @@ for ticker in TICKERS:
         info = stock.info
         name = info.get("shortName", ticker)
         
-        # ETF와 일반 주식의 가격 표시 방식이 달라 모두 탐색하도록 보완
         price = info.get("currentPrice") or info.get("regularMarketPrice") or info.get("navPrice") or "N/A"
-        
         per = round(info.get("trailingPE", 0), 2) if info.get("trailingPE") else "N/A"
         f_per = round(info.get("forwardPE", 0), 2) if info.get("forwardPE") else "N/A"
         pbr = round(info.get("priceToBook", 0), 2) if info.get("priceToBook") else "N/A"
@@ -42,19 +39,23 @@ for ticker in TICKERS:
         
         stock_data = f"현재가: ${price}\nPER: {per} (내년 예상: {f_per})\nPBR: {pbr}\nROE: {roe}%\n부채비율: {debt}%\n배당수익률: {div}%"
         
+        # ★ AI 두뇌 업그레이드: ETF와 커버드콜을 스스로 파악하고 본주를 분석하도록 지시 ★
         prompt = f"""
-        너는 주식 초보자를 위한 친절한 주식 멘토야. 
-        반드시 100% '한국어'로만 대답하고, 복잡한 표나 영어는 빼고 스마트폰에서 읽기 쉽게 작성해.
+        너는 주식 초보자를 위한 수석 투자 전략가야. 
+        반드시 100% '한국어'로만 대답하고, 초보자가 스마트폰에서 읽기 편하게 작성해.
 
-        아래 {name}({ticker})의 [주식 지표]를 보고 분석해줘:
-        1. 📊 현재 상태: 이 주식이 현재 비싼지 싼지, 돈을 잘 버는지, 빚(부채)이나 배당은 어떤지 일상적인 비유로 1~2줄로 아주 쉽게 설명해. ETF의 경우 지표가 없으면 생략하고 특징만 설명해.
-        2. 💡 종합 의견: 지금 사야 할지, 관망할지 전체적인 투자 의견을 3줄 이내로 명확히 요약해.
+        아래 {name}({ticker})의 [주식 지표]를 보고 분석해줘.
+
+        [핵심 분석 지시사항]
+        1. 일반 주식일 경우: PER, PBR 등의 지표를 바탕으로 현재 가격이 비싼지 싼지, 돈을 잘 버는지 비유를 들어 쉽게 설명해.
+        2. 🚨 ETF 또는 커버드콜 ETF일 경우 (매우 중요): 지표가 N/A로 나와도 당황하지 마. 대신 네 지식을 총동원해서 이 종목 이름({name})이 추종하는 '기초 자산(본주 또는 지수)'이 정확히 무엇인지 찾아내. 그리고 껍데기 지표 대신 그 **'기초 자산'의 향후 시장 전망과 미래 가치**를 중심으로 분석해줘. (만약 한국/미국 커버드콜 ETF라면, 현재 증시 상황에서 이 커버드콜 전략이 유리할지, 배당(분배금)의 장점과 원금 손실 위험성 등 주의할 점을 꼭 포함해줘.)
+        3. 종합 의견: 그래서 지금 사야 할지, 관망해야 할지 3줄 이내로 명확한 액션 플랜을 제시해.
 
         [주식 지표]
         {stock_data}
         """
         
-        # 5. AI 분석 요청 (성공할 때까지 모델 변경하며 시도)
+        # AI 분석 요청
         ai_analysis = ""
         for model in BEST_MODELS:
             ai_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_API_KEY}"
@@ -64,7 +65,7 @@ for ticker in TICKERS:
             
             if "candidates" in res_json:
                 ai_analysis = res_json['candidates'][0]['content']['parts'][0]['text']
-                break # 성공하면 즉시 종료하고 다음으로 넘어감
+                break 
             else:
                 ai_analysis = f"AI 서버 거절 사유 ({model}): {res.text}"
                 
@@ -72,12 +73,11 @@ for ticker in TICKERS:
         stock_data = "데이터를 불러오는 중 오류가 발생했습니다."
         ai_analysis = f"오류 원인: {e}"
 
-    # 6. 최종 메시지 조립
+    # 4. 최종 메시지 조립 및 발송
     final_message = f"⏰ [작성 일시: {current_time}]\n\n🔎 [{name} ({ticker})] 핵심 지표\n{stock_data}\n\n🤖 [AI 멘토 의견]\n{ai_analysis}"
     
-    # 텔레그램으로 전송
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     requests.post(url, data={"chat_id": CHAT_ID, "text": final_message})
     
-    # ★ 구글 무료 API 속도 제한(1분 15회)에 걸리지 않도록 종목과 종목 사이 5초 휴식 ★
+    # API 과부하 방지 (5초 대기)
     time.sleep(5)
