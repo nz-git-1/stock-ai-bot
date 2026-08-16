@@ -38,8 +38,22 @@ prompt = f"""
 {raw_data}
 """
 
-# 3. 구글 AI 서버와 통신 (에러가 나던 이름표를 gemini-pro로 완벽히 수정함)
-ai_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={GEMINI_API_KEY}"
+# 3. 내 API 키로 사용 가능한 구글 AI 모델 '자동 검색' (에러 완벽 차단)
+model_name = "gemini-pro" # 기본값
+try:
+    list_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={GEMINI_API_KEY}"
+    list_res = requests.get(list_url).json()
+    if "models" in list_res:
+        for m in list_res["models"]:
+            # 글을 생성할 수 있는 AI 모델 중 첫 번째 것을 자동으로 선택
+            if "generateContent" in m.get("supportedGenerationMethods", []):
+                model_name = m["name"].split("/")[-1]
+                break
+except Exception:
+    pass
+
+# 4. 자동으로 찾은 AI 모델을 사용해 분석 요청
+ai_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
 headers = {'Content-Type': 'application/json'}
 payload = {
     "contents": [{"parts": [{"text": prompt}]}]
@@ -52,14 +66,14 @@ try:
     # 정상적으로 분석을 받아온 경우
     if "candidates" in res_json:
         ai_analysis = res_json['candidates'][0]['content']['parts'][0]['text']
-    # 구글 서버가 에러를 뱉은 경우 (진짜 이유 출력)
+    # 구글 서버가 에러를 뱉은 경우
     else:
-        ai_analysis = f"AI 서버 거절 사유: {res.text}"
+        ai_analysis = f"AI 서버 거절 사유 (자동 적용된 모델: {model_name}): {res.text}"
         
 except Exception as e:
     ai_analysis = f"통신 오류 발생: {e}"
 
-# 4. 텔레그램으로 전송
+# 5. 텔레그램으로 전송
 final_message = f"📊 [오늘의 주식 지표]\n{raw_data}\n\n🤖 [AI 분석 의견]\n{ai_analysis}"
 url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
 requests.post(url, data={"chat_id": CHAT_ID, "text": final_message})
