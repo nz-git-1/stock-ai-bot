@@ -37,7 +37,6 @@ def get_val(info, key, multiplier=1):
     except:
         return "N/A"
 
-# 에러 났던 JSON 강제 기능을 완전히 빼고, 순수하게 질문만 던짐
 def ask_ai(prompt):
     for model_name in valid_models:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
@@ -45,10 +44,16 @@ def ask_ai(prompt):
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {"temperature": 0.1}
         }
-        res = requests.post(url, headers={'Content-Type': 'application/json'}, json=payload).json()
-        if "candidates" in res:
-            return res['candidates'][0]['content']['parts'][0]['text'].strip()
-    return "AI 분석 실패"
+        for _ in range(3):
+            try:
+                # 서버 통신 대기 시간(timeout=15) 추가로 에러 방지
+                res = requests.post(url, headers={'Content-Type': 'application/json'}, json=payload, timeout=15).json()
+                if "candidates" in res:
+                    return res['candidates'][0]['content']['parts'][0]['text'].strip()
+                break 
+            except Exception:
+                time.sleep(2)
+    return ""
 
 for ticker in TICKERS:
     try:
@@ -85,30 +90,38 @@ for ticker in TICKERS:
         
         time.sleep(2)
         
-        # 2단계: 에러 안 나는 순수 텍스트 변환 (선생님 아이디어 적용)
-        prompt2 = f"""다음 원본 분석글을 바탕으로, 숫자(수치)와 영어 단어를 완전히 빼고 초보자가 이해하기 쉬운 '비유'를 써서 딱 2문장으로 한국어 요약해.
+        # 2단계: 한국어 번역 요청
+        prompt2 = f"""다음 원본 분석글을 바탕으로 숫자와 영어를 완전히 빼고 초보자가 이해하기 쉬운 한국어 비유를 써서 요약해.
+반드시 아래 두 줄을 포함해서 작성해:
+📊 현재 상태: (여기에 내용)
+💡 종합 의견: (여기에 내용)
 
 [원본 분석글]
-{raw_analysis}
-
-[절대 규칙]
-1. 불필요한 인사말, 너의 생각, 부연 설명은 절대 쓰지 마.
-2. 무조건 아래 [출력 양식] 글자 그대로 시작해서 딱 2줄만 출력해.
-
-[출력 양식]
-📊 현재 상태: (비유를 포함한 한국어 요약)
-💡 종합 의견: (매수/관망 등 결론을 포함한 한국어 요약)"""
+{raw_analysis}"""
         
-        ai_analysis = ask_ai(prompt2)
+        ai_raw_text = ask_ai(prompt2)
+        
+        # ★★★ 이 부분이 핵심입니다: AI가 뱉어낸 텍스트에서 딱 두 줄만 핀셋으로 추출 ★★★
+        final_status = "📊 현재 상태: (데이터 요약 실패)"
+        final_opinion = "💡 종합 의견: (의견 요약 실패)"
+        
+        # AI가 영어로 뭐라고 떠들든, 무시하고 📊와 💡로 시작하는 줄만 찾습니다.
+        for line in ai_raw_text.split('\n'):
+            line = line.strip()
+            if line.startswith('📊'):
+                final_status = line
+            elif line.startswith('💡'):
+                final_opinion = line
+                
+        # 추출한 딱 2줄만 최종 결과로 씁니다.
+        ai_analysis = f"{final_status}\n{final_opinion}"
 
     except Exception as e:
         stock_data = "데이터 수집 오류 발생"
         ai_analysis = f"오류 원인: {e}"
 
+    # 최종 텔레그램 메시지 조립
     final_message = f"⏰ [작성 일시: {current_time}]\n\n🔎 [{name} ({ticker})] 핵심 지표\n{stock_data}\n\n🤖 [AI 멘토 의견]\n{ai_analysis}"
-    
-    if len(final_message) > 4000:
-        final_message = final_message[:3900] + "\n\n(※ AI 분석이 너무 길어 일부 생략됨)"
 
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     t_res = requests.post(url, data={"chat_id": CHAT_ID, "text": final_message})
