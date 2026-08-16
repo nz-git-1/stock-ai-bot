@@ -4,7 +4,6 @@ import yfinance as yf
 import time
 from datetime import datetime, timezone, timedelta
 
-# 1. 한국 시간 설정 (건드리지 않음)
 kst = timezone(timedelta(hours=9))
 current_time = datetime.now(kst).strftime("%Y년 %m월 %d일 %H시 %M분")
 
@@ -12,7 +11,6 @@ TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
-# 2. 티커 파일 읽기 (건드리지 않음)
 try:
     with open("tickers.txt", "r") as f:
         TICKERS = [line.strip().upper() for line in f if line.strip()]
@@ -22,7 +20,6 @@ except FileNotFoundError:
 if not TICKERS:
     raise Exception("tickers.txt 파일이 비어있습니다. 종목을 입력해 주세요!")
 
-# 3. AI 모델 자동 찾기 (건드리지 않음)
 valid_models = ["gemini-1.5-flash", "gemini-pro"]
 try:
     list_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={GEMINI_API_KEY}"
@@ -32,7 +29,6 @@ try:
 except:
     pass
 
-# 4. 숫자 데이터 철벽 방어 함수 (건드리지 않음)
 def get_val(info, key, multiplier=1):
     try:
         val = info.get(key)
@@ -41,10 +37,8 @@ def get_val(info, key, multiplier=1):
     except:
         return "N/A"
 
-# 5. 종목별 분석 시작
 for ticker in TICKERS:
     try:
-        # ★ 수정 1: 야후 파이낸스 접속 끊김(엔비디아) 방지용 최대 3회 재시도 ★
         info = None
         for _ in range(3):
             try:
@@ -52,7 +46,7 @@ for ticker in TICKERS:
                 info = stock.info
                 if info: break
             except Exception:
-                time.sleep(2) # 끊기면 2초 쉬고 다시 시도
+                time.sleep(2)
         
         if info is None:
             info = {}
@@ -73,16 +67,17 @@ for ticker in TICKERS:
             
         stock_data = f"현재가: {currency}{price}\nPER: {per} (내년 예상: {f_per})\nPBR: {pbr}\nROE: {roe}%\n부채비율: {debt}%\n배당수익률: {div}%"
         
-        # ★ 수정 2: AI 영어 체크리스트 헛소리 원천 차단 문구 추가 ★
-        prompt = f"""주식 데이터를 바탕으로 초보자에게 딱 2가지만 한국어로 설명하세요.
-주의: 영어 절대 금지! AI 스스로의 생각이나 체크리스트(예: Korean only? Yes)를 화면에 출력하지 마세요. 반드시 최종 결과만 [출력 양식]에 맞춰 작성하세요.
+        # ★ 수정된 부분: AI가 헛소리를 덧붙이지 못하도록 아주 건조하고 단호한 양식 강제 ★
+        prompt = f"""당신은 한국인 주식 분석가입니다.
+아래 데이터를 바탕으로 지정된 [출력 양식]에 맞춰서 딱 2문단만 작성하세요.
+분석 전후에 당신의 생각, 확인 과정, 영어 단어 등을 절대 출력하지 마세요. 즉시 '📊 현재 상태:'로 시작해야 합니다.
 
-[종목: {name} ({ticker})]
+데이터: {name}({ticker})
 {stock_data}
 
 [출력 양식]
-📊 현재 상태: (비싼지 싼지, 돈을 잘 버는지 비유를 들어 2줄 이내로 한국어로 요약)
-💡 종합 의견: (매수할지 관망할지 2줄 이내로 한국어로 명확히 결론)
+📊 현재 상태: (비싼지 싼지, 돈을 잘 버는지 비유를 들어 1~2줄로 한국어로 요약)
+💡 종합 의견: (매수할지 관망할지 1~2줄로 한국어로 명확히 결론)
 """
         
         ai_analysis = ""
@@ -105,10 +100,8 @@ for ticker in TICKERS:
         stock_data = "데이터 수집 오류 발생"
         ai_analysis = f"오류 원인: {e}"
 
-    # 메시지 조립 (건드리지 않음)
     final_message = f"⏰ [작성 일시: {current_time}]\n\n🔎 [{name} ({ticker})] 핵심 지표\n{stock_data}\n\n🤖 [AI 멘토 의견]\n{ai_analysis}"
     
-    # 글자 수 제한 처리 (건드리지 않음)
     if len(final_message) > 4000:
         final_message = final_message[:3900] + "\n\n(※ AI 분석이 너무 길어 일부 생략됨)"
 
