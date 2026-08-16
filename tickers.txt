@@ -1,4 +1,4 @@
-krx:498400
+498400.KS
 NVDA
-unhw
-divo
+UNHW
+DIVO
