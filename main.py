@@ -38,38 +38,34 @@ prompt = f"""
 {raw_data}
 """
 
-# 3. 내 API 키로 사용 가능한 구글 AI 모델 '자동 검색' (에러 완벽 차단)
-model_name = "gemini-pro" # 기본값
+headers = {'Content-Type': 'application/json'}
+payload = {"contents": [{"parts": [{"text": prompt}]}]}
+ai_analysis = "사용 가능한 모델을 찾지 못했습니다."
+
 try:
+    # 3. 구글에 있는 '모든 AI 모델' 목록 가져오기
     list_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={GEMINI_API_KEY}"
     list_res = requests.get(list_url).json()
+    
+    valid_models = []
     if "models" in list_res:
         for m in list_res["models"]:
-            # 글을 생성할 수 있는 AI 모델 중 첫 번째 것을 자동으로 선택
             if "generateContent" in m.get("supportedGenerationMethods", []):
-                model_name = m["name"].split("/")[-1]
-                break
-except Exception:
-    pass
-
-# 4. 자동으로 찾은 AI 모델을 사용해 분석 요청
-ai_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
-headers = {'Content-Type': 'application/json'}
-payload = {
-    "contents": [{"parts": [{"text": prompt}]}]
-}
-
-try:
-    res = requests.post(ai_url, headers=headers, json=payload)
-    res_json = res.json()
+                valid_models.append(m["name"].split("/")[-1])
     
-    # 정상적으로 분석을 받아온 경우
-    if "candidates" in res_json:
-        ai_analysis = res_json['candidates'][0]['content']['parts'][0]['text']
-    # 구글 서버가 에러를 뱉은 경우
-    else:
-        ai_analysis = f"AI 서버 거절 사유 (자동 적용된 모델: {model_name}): {res.text}"
+    # 4. 목록의 모델들을 하나씩 찔러보며 성공할 때까지 무한 도전
+    for model_name in valid_models:
+        ai_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
+        res = requests.post(ai_url, headers=headers, json=payload)
+        res_json = res.json()
         
+        # 분석 결과를 제대로 뱉어내면 즉시 채택하고 루프 종료!
+        if "candidates" in res_json:
+            ai_analysis = f"(사용된 모델: {model_name})\n" + res_json['candidates'][0]['content']['parts'][0]['text']
+            break 
+        else:
+            ai_analysis = f"마지막 시도 모델({model_name}) 거절 사유: {res.text}"
+            
 except Exception as e:
     ai_analysis = f"통신 오류 발생: {e}"
 
