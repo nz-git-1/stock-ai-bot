@@ -4,7 +4,7 @@ import yfinance as yf
 import time
 from datetime import datetime, timezone, timedelta
 
-# 1. 한국 시간 설정
+# 1. 한국 시간 설정 (건드리지 않음)
 kst = timezone(timedelta(hours=9))
 current_time = datetime.now(kst).strftime("%Y년 %m월 %d일 %H시 %M분")
 
@@ -12,7 +12,7 @@ TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
-# 2. 티커 파일 읽기
+# 2. 티커 파일 읽기 (건드리지 않음)
 try:
     with open("tickers.txt", "r") as f:
         TICKERS = [line.strip().upper() for line in f if line.strip()]
@@ -22,7 +22,7 @@ except FileNotFoundError:
 if not TICKERS:
     raise Exception("tickers.txt 파일이 비어있습니다. 종목을 입력해 주세요!")
 
-# 3. AI 모델 자동 찾기
+# 3. AI 모델 자동 찾기 (건드리지 않음)
 valid_models = ["gemini-1.5-flash", "gemini-pro"]
 try:
     list_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={GEMINI_API_KEY}"
@@ -32,7 +32,7 @@ try:
 except:
     pass
 
-# 4. 숫자 데이터 철벽 방어 함수
+# 4. 숫자 데이터 철벽 방어 함수 (건드리지 않음)
 def get_val(info, key, multiplier=1):
     try:
         val = info.get(key)
@@ -44,14 +44,23 @@ def get_val(info, key, multiplier=1):
 # 5. 종목별 분석 시작
 for ticker in TICKERS:
     try:
-        stock = yf.Ticker(ticker)
-        info = stock.info
-        name = info.get("shortName", ticker) if isinstance(info, dict) else ticker
+        # ★ 수정 1: 야후 파이낸스 접속 끊김(엔비디아) 방지용 최대 3회 재시도 ★
+        info = None
+        for _ in range(3):
+            try:
+                stock = yf.Ticker(ticker)
+                info = stock.info
+                if info: break
+            except Exception:
+                time.sleep(2) # 끊기면 2초 쉬고 다시 시도
         
-        # 화폐 기호 처리
+        if info is None:
+            info = {}
+
+        name = info.get("shortName", ticker) if isinstance(info, dict) else ticker
         currency = "₩" if ticker.endswith(".KS") or ticker.endswith(".KQ") else "$"
         
-        if isinstance(info, dict):
+        if isinstance(info, dict) and info:
             price = info.get("currentPrice") or info.get("regularMarketPrice") or info.get("navPrice") or "N/A"
             per = get_val(info, "trailingPE")
             f_per = get_val(info, "forwardPE")
@@ -64,8 +73,9 @@ for ticker in TICKERS:
             
         stock_data = f"현재가: {currency}{price}\nPER: {per} (내년 예상: {f_per})\nPBR: {pbr}\nROE: {roe}%\n부채비율: {debt}%\n배당수익률: {div}%"
         
+        # ★ 수정 2: AI 영어 체크리스트 헛소리 원천 차단 문구 추가 ★
         prompt = f"""주식 데이터를 바탕으로 초보자에게 딱 2가지만 한국어로 설명하세요.
-주의: 영어 절대 금지. 내가 입력한 지시문 반복 출력 절대 금지. 수치(PER 등) 반복 언급 금지. 결과만 출력할 것.
+주의: 영어 절대 금지! AI 스스로의 생각이나 체크리스트(예: Korean only? Yes)를 화면에 출력하지 마세요. 반드시 최종 결과만 [출력 양식]에 맞춰 작성하세요.
 
 [종목: {name} ({ticker})]
 {stock_data}
@@ -80,7 +90,7 @@ for ticker in TICKERS:
             ai_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
             payload = {
                 "contents": [{"parts": [{"text": prompt}]}],
-                "generationConfig": {"temperature": 0.1} # AI 헛소리 통제
+                "generationConfig": {"temperature": 0.1} 
             }
             res = requests.post(ai_url, headers={'Content-Type': 'application/json'}, json=payload)
             res_json = res.json()
@@ -95,10 +105,10 @@ for ticker in TICKERS:
         stock_data = "데이터 수집 오류 발생"
         ai_analysis = f"오류 원인: {e}"
 
-    # 메시지 조립
+    # 메시지 조립 (건드리지 않음)
     final_message = f"⏰ [작성 일시: {current_time}]\n\n🔎 [{name} ({ticker})] 핵심 지표\n{stock_data}\n\n🤖 [AI 멘토 의견]\n{ai_analysis}"
     
-    # ★ 텔레그램 글자 수 4,000자 초과 방어막 (이게 빠져서 그동안 에러가 났습니다!) ★
+    # 글자 수 제한 처리 (건드리지 않음)
     if len(final_message) > 4000:
         final_message = final_message[:3900] + "\n\n(※ AI 분석이 너무 길어 일부 생략됨)"
 
