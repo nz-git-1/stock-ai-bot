@@ -55,4 +55,7 @@ except Exception as e:
 # 4. 텔레그램으로 전송
 final_message = f"📊 [오늘의 주식 지표]\n{raw_data}\n\n🤖 [AI 분석 의견]\n{ai_analysis}"
 url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-requests.post(url, data={"chat_id": CHAT_ID, "text": final_message})
+res = requests.post(url, data={"chat_id": CHAT_ID, "text": final_message})
+if res.status_code != 200:
+    print(f"텔레그램 전송 실패! 상세 에러: {res.text}")
+    raise Exception("텔레그램 아이디나 토큰이 잘못되었습니다.")
