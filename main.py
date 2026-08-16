@@ -2,9 +2,10 @@ import os
 import requests
 import yfinance as yf
 import time
+import json
 from datetime import datetime, timezone, timedelta
 
-# 1. 잘 작동하는 기본 세팅 유지
+# 1. 기본 세팅
 kst = timezone(timedelta(hours=9))
 current_time = datetime.now(kst).strftime("%Y년 %m월 %d일 %H시 %M분")
 
@@ -38,20 +39,25 @@ def get_val(info, key, multiplier=1):
     except:
         return "N/A"
 
-# ★ 새로 추가한 핵심 기능: AI에게 질문하는 전용 함수 ★
-def ask_ai(prompt):
+# ★ 핵심: JSON(컴퓨터 데이터)으로만 대답하게 멱살 잡는 기능 추가 ★
+def ask_ai(prompt, force_json=False):
     for model_name in valid_models:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
-        payload = {"contents": [{"parts": [{"text": prompt}]}], "generationConfig": {"temperature": 0.1}}
+        config = {"temperature": 0.1}
+        # 구글 서버에 "이 녀석이 사람처럼 말 못하게 데이터 형식으로만 받겠다"고 선언
+        if force_json:
+            config["responseMimeType"] = "application/json"
+            
+        payload = {"contents": [{"parts": [{"text": prompt}]}], "generationConfig": config}
         res = requests.post(url, headers={'Content-Type': 'application/json'}, json=payload).json()
         if "candidates" in res:
             return res['candidates'][0]['content']['parts'][0]['text'].strip()
-    return "AI 분석 실패"
+    return ""
 
-# 2. 종목별 데이터 수집 및 분석 시작
+# 2. 종목별 분석 시작
 for ticker in TICKERS:
     try:
-        # 데이터 수집 (안전하게 3회 재시도 로직 유지)
+        # 데이터 수집 (안전하게 3회 재시도)
         info = None
         for _ in range(3):
             try:
@@ -79,42 +85,47 @@ for ticker in TICKERS:
             
         stock_data = f"현재가: {currency}{price}\nPER: {per} (내년 예상: {f_per})\nPBR: {pbr}\nROE: {roe}%\n부채비율: {debt}%\n배당수익률: {div}%"
         
-        # ---------------------------------------------------------
-        # ★ 선생님 아이디어 적용: 1단계 (자유롭게 분석하기) ★
+        # 1단계: 자유롭게 영어로든 뭐든 알아서 속으로 분석하게 던져줌
         prompt1 = f"Analyze the stock/ETF {name} ({ticker}) based on this data: {stock_data}. What is its fundamental status and investment outlook?"
-        raw_analysis = ask_ai(prompt1)
+        raw_analysis = ask_ai(prompt1, force_json=False)
         
-        time.sleep(2) # 구글 API 제한 안 걸리게 2초 휴식
+        time.sleep(2)
         
-        # ★ 선생님 아이디어 적용: 2단계 (중복 숫자 빼고 100% 한글 번역) ★
-        prompt2 = f"""다음 원본 분석글을 '100% 한국어'로만 번역 및 요약해.
-
-[절대 규칙]
-1. 이미 데이터는 화면에 보여주므로, 번역할 때 숫자(PER 수치, 주가 등)나 영어 단어는 싹 다 빼고 자연스러운 비유로 바꿔라.
-2. 불필요한 인사말, 너의 생각, 체크리스트는 절대 적지 마라.
-3. 딱 아래 양식대로 2줄만 출력해라.
+        # ★ 2단계: 속으로 분석한 내용을 무조건 '데이터 껍데기'에만 담아서 꺼내오라고 강제 ★
+        prompt2 = f"""다음 원본 분석글을 읽고, 숫자와 영어를 모두 뺀 뒤 100% 한국어 비유로만 요약해.
 
 [원본 분석글]
 {raw_analysis}
 
-[출력 양식]
-📊 현재 상태: (수치 없이 가치와 수익성을 한국어로 요약)
-💡 종합 의견: (매수/관망 등 결론을 한국어로 요약)"""
+반드시 아래 JSON 데이터 형식으로만 값을 채워서 반환할 것:
+{{
+    "status": "현재 상태에 대한 한국어 비유 요약 1줄",
+    "opinion": "종합 의견(매수/관망 등)에 대한 한국어 요약 1줄"
+}}"""
         
-        ai_analysis = ask_ai(prompt2)
-        # ---------------------------------------------------------
+        # force_json=True 를 켜서 헛소리 원천 봉쇄
+        ai_raw_json = ask_ai(prompt2, force_json=True)
+        
+        # 컴퓨터 데이터에서 딱 우리가 원하는 두 줄만 알맹이 빼먹기
+        try:
+            # 혹시 모를 찌꺼기 텍스트(```json 등) 제거
+            clean_json = ai_raw_json.replace('```json', '').replace('```', '').strip()
+            data = json.loads(clean_json)
+            ai_analysis = f"📊 현재 상태: {data.get('status', '요약 불가')}\n💡 종합 의견: {data.get('opinion', '의견 없음')}"
+        except Exception:
+            ai_analysis = "AI 요약 실패 (데이터 변환 오류)"
 
     except Exception as e:
         stock_data = "데이터 수집 오류 발생"
         ai_analysis = f"오류 원인: {e}"
 
-    # 잘 작동하는 메시지 전송 로직 유지
+    # 최종 메시지 조립
     final_message = f"⏰ [작성 일시: {current_time}]\n\n🔎 [{name} ({ticker})] 핵심 지표\n{stock_data}\n\n🤖 [AI 멘토 의견]\n{ai_analysis}"
     
     if len(final_message) > 4000:
         final_message = final_message[:3900] + "\n\n(※ AI 분석이 너무 길어 일부 생략됨)"
 
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    url = f"[https://api.telegram.org/bot](https://api.telegram.org/bot){TELEGRAM_TOKEN}/sendMessage"
     t_res = requests.post(url, data={"chat_id": CHAT_ID, "text": final_message})
     
     if t_res.status_code != 200:
