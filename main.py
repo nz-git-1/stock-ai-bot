@@ -4,6 +4,7 @@ import yfinance as yf
 import time
 from datetime import datetime, timezone, timedelta
 
+# 1. 잘 작동하는 기본 세팅 유지
 kst = timezone(timedelta(hours=9))
 current_time = datetime.now(kst).strftime("%Y년 %m월 %d일 %H시 %M분")
 
@@ -18,7 +19,7 @@ except FileNotFoundError:
     TICKERS = ["AAPL"]
 
 if not TICKERS:
-    raise Exception("tickers.txt 파일이 비어있습니다. 종목을 입력해 주세요!")
+    raise Exception("tickers.txt 파일이 비어있습니다.")
 
 valid_models = ["gemini-1.5-flash", "gemini-pro"]
 try:
@@ -37,8 +38,20 @@ def get_val(info, key, multiplier=1):
     except:
         return "N/A"
 
+# ★ 새로 추가한 핵심 기능: AI에게 질문하는 전용 함수 ★
+def ask_ai(prompt):
+    for model_name in valid_models:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
+        payload = {"contents": [{"parts": [{"text": prompt}]}], "generationConfig": {"temperature": 0.1}}
+        res = requests.post(url, headers={'Content-Type': 'application/json'}, json=payload).json()
+        if "candidates" in res:
+            return res['candidates'][0]['content']['parts'][0]['text'].strip()
+    return "AI 분석 실패"
+
+# 2. 종목별 데이터 수집 및 분석 시작
 for ticker in TICKERS:
     try:
+        # 데이터 수집 (안전하게 3회 재시도 로직 유지)
         info = None
         for _ in range(3):
             try:
@@ -48,8 +61,7 @@ for ticker in TICKERS:
             except Exception:
                 time.sleep(2)
         
-        if info is None:
-            info = {}
+        if info is None: info = {}
 
         name = info.get("shortName", ticker) if isinstance(info, dict) else ticker
         currency = "₩" if ticker.endswith(".KS") or ticker.endswith(".KQ") else "$"
@@ -67,39 +79,36 @@ for ticker in TICKERS:
             
         stock_data = f"현재가: {currency}{price}\nPER: {per} (내년 예상: {f_per})\nPBR: {pbr}\nROE: {roe}%\n부채비율: {debt}%\n배당수익률: {div}%"
         
-        # ★ 수정된 부분: AI가 헛소리를 덧붙이지 못하도록 아주 건조하고 단호한 양식 강제 ★
-        prompt = f"""당신은 한국인 주식 분석가입니다.
-아래 데이터를 바탕으로 지정된 [출력 양식]에 맞춰서 딱 2문단만 작성하세요.
-분석 전후에 당신의 생각, 확인 과정, 영어 단어 등을 절대 출력하지 마세요. 즉시 '📊 현재 상태:'로 시작해야 합니다.
+        # ---------------------------------------------------------
+        # ★ 선생님 아이디어 적용: 1단계 (자유롭게 분석하기) ★
+        prompt1 = f"Analyze the stock/ETF {name} ({ticker}) based on this data: {stock_data}. What is its fundamental status and investment outlook?"
+        raw_analysis = ask_ai(prompt1)
+        
+        time.sleep(2) # 구글 API 제한 안 걸리게 2초 휴식
+        
+        # ★ 선생님 아이디어 적용: 2단계 (중복 숫자 빼고 100% 한글 번역) ★
+        prompt2 = f"""다음 원본 분석글을 '100% 한국어'로만 번역 및 요약해.
 
-데이터: {name}({ticker})
-{stock_data}
+[절대 규칙]
+1. 이미 데이터는 화면에 보여주므로, 번역할 때 숫자(PER 수치, 주가 등)나 영어 단어는 싹 다 빼고 자연스러운 비유로 바꿔라.
+2. 불필요한 인사말, 너의 생각, 체크리스트는 절대 적지 마라.
+3. 딱 아래 양식대로 2줄만 출력해라.
+
+[원본 분석글]
+{raw_analysis}
 
 [출력 양식]
-📊 현재 상태: (비싼지 싼지, 돈을 잘 버는지 비유를 들어 1~2줄로 한국어로 요약)
-💡 종합 의견: (매수할지 관망할지 1~2줄로 한국어로 명확히 결론)
-"""
+📊 현재 상태: (수치 없이 가치와 수익성을 한국어로 요약)
+💡 종합 의견: (매수/관망 등 결론을 한국어로 요약)"""
         
-        ai_analysis = ""
-        for model_name in valid_models:
-            ai_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
-            payload = {
-                "contents": [{"parts": [{"text": prompt}]}],
-                "generationConfig": {"temperature": 0.1} 
-            }
-            res = requests.post(ai_url, headers={'Content-Type': 'application/json'}, json=payload)
-            res_json = res.json()
-            
-            if "candidates" in res_json:
-                ai_analysis = res_json['candidates'][0]['content']['parts'][0]['text'].strip()
-                break 
-            else:
-                ai_analysis = f"AI 서버 에러 ({model_name}): {res.text}"
-                
+        ai_analysis = ask_ai(prompt2)
+        # ---------------------------------------------------------
+
     except Exception as e:
         stock_data = "데이터 수집 오류 발생"
         ai_analysis = f"오류 원인: {e}"
 
+    # 잘 작동하는 메시지 전송 로직 유지
     final_message = f"⏰ [작성 일시: {current_time}]\n\n🔎 [{name} ({ticker})] 핵심 지표\n{stock_data}\n\n🤖 [AI 멘토 의견]\n{ai_analysis}"
     
     if len(final_message) > 4000:
