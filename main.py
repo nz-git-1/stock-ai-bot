@@ -2,7 +2,6 @@ import os
 import requests
 import yfinance as yf
 import time
-import json
 from datetime import datetime, timezone, timedelta
 
 kst = timezone(timedelta(hours=9))
@@ -38,18 +37,18 @@ def get_val(info, key, multiplier=1):
     except:
         return "N/A"
 
-def ask_ai(prompt, force_json=False):
+# 에러 났던 JSON 강제 기능을 완전히 빼고, 순수하게 질문만 던짐
+def ask_ai(prompt):
     for model_name in valid_models:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
-        config = {"temperature": 0.1}
-        if force_json:
-            config["responseMimeType"] = "application/json"
-            
-        payload = {"contents": [{"parts": [{"text": prompt}]}], "generationConfig": config}
+        payload = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {"temperature": 0.1}
+        }
         res = requests.post(url, headers={'Content-Type': 'application/json'}, json=payload).json()
         if "candidates" in res:
             return res['candidates'][0]['content']['parts'][0]['text'].strip()
-    return ""
+    return "AI 분석 실패"
 
 for ticker in TICKERS:
     try:
@@ -80,30 +79,27 @@ for ticker in TICKERS:
             
         stock_data = f"현재가: {currency}{price}\nPER: {per} (내년 예상: {f_per})\nPBR: {pbr}\nROE: {roe}%\n부채비율: {debt}%\n배당수익률: {div}%"
         
+        # 1단계: 자유롭게 분석
         prompt1 = f"Analyze the stock/ETF {name} ({ticker}) based on this data: {stock_data}. What is its fundamental status and investment outlook?"
-        raw_analysis = ask_ai(prompt1, force_json=False)
+        raw_analysis = ask_ai(prompt1)
         
         time.sleep(2)
         
-        prompt2 = f"""다음 원본 분석글을 읽고, 숫자와 영어를 모두 뺀 뒤 100% 한국어 비유로만 요약해.
+        # 2단계: 에러 안 나는 순수 텍스트 변환 (선생님 아이디어 적용)
+        prompt2 = f"""다음 원본 분석글을 바탕으로, 숫자(수치)와 영어 단어를 완전히 빼고 초보자가 이해하기 쉬운 '비유'를 써서 딱 2문장으로 한국어 요약해.
 
 [원본 분석글]
 {raw_analysis}
 
-반드시 아래 JSON 데이터 형식으로만 값을 채워서 반환할 것:
-{{
-    "status": "현재 상태에 대한 한국어 비유 요약 1줄",
-    "opinion": "종합 의견(매수/관망 등)에 대한 한국어 요약 1줄"
-}}"""
+[절대 규칙]
+1. 불필요한 인사말, 너의 생각, 부연 설명은 절대 쓰지 마.
+2. 무조건 아래 [출력 양식] 글자 그대로 시작해서 딱 2줄만 출력해.
+
+[출력 양식]
+📊 현재 상태: (비유를 포함한 한국어 요약)
+💡 종합 의견: (매수/관망 등 결론을 포함한 한국어 요약)"""
         
-        ai_raw_json = ask_ai(prompt2, force_json=True)
-        
-        try:
-            clean_json = ai_raw_json.replace('```json', '').replace('```', '').strip()
-            data = json.loads(clean_json)
-            ai_analysis = f"📊 현재 상태: {data.get('status', '요약 불가')}\n💡 종합 의견: {data.get('opinion', '의견 없음')}"
-        except Exception:
-            ai_analysis = "AI 요약 실패 (데이터 변환 오류)"
+        ai_analysis = ask_ai(prompt2)
 
     except Exception as e:
         stock_data = "데이터 수집 오류 발생"
@@ -114,7 +110,6 @@ for ticker in TICKERS:
     if len(final_message) > 4000:
         final_message = final_message[:3900] + "\n\n(※ AI 분석이 너무 길어 일부 생략됨)"
 
-    # 바로 이 부분이 오타가 나 있었습니다!
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     t_res = requests.post(url, data={"chat_id": CHAT_ID, "text": final_message})
     
