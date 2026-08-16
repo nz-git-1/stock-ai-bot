@@ -38,7 +38,7 @@ prompt = f"""
 {raw_data}
 """
 
-# 3. 구글 AI 서버와 '직접' 다이렉트 통신 (버그 우회)
+# 3. 구글 AI 서버와 통신
 ai_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
 headers = {'Content-Type': 'application/json'}
 payload = {
@@ -48,14 +48,18 @@ payload = {
 try:
     res = requests.post(ai_url, headers=headers, json=payload)
     res_json = res.json()
-    ai_analysis = res_json['candidates'][0]['content']['parts'][0]['text']
+    
+    # 정상적으로 분석을 받아온 경우
+    if "candidates" in res_json:
+        ai_analysis = res_json['candidates'][0]['content']['parts'][0]['text']
+    # 구글 서버가 에러를 뱉은 경우 (진짜 이유 출력)
+    else:
+        ai_analysis = f"AI 서버 거절 사유: {res.text}"
+        
 except Exception as e:
-    ai_analysis = f"AI 분석을 받아오지 못했습니다. 오류: {e}"
+    ai_analysis = f"통신 오류 발생: {e}"
 
 # 4. 텔레그램으로 전송
 final_message = f"📊 [오늘의 주식 지표]\n{raw_data}\n\n🤖 [AI 분석 의견]\n{ai_analysis}"
 url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-res = requests.post(url, data={"chat_id": CHAT_ID, "text": final_message})
-if res.status_code != 200:
-    print(f"텔레그램 전송 실패! 상세 에러: {res.text}")
-    raise Exception("텔레그램 아이디나 토큰이 잘못되었습니다.")
+requests.post(url, data={"chat_id": CHAT_ID, "text": final_message})
