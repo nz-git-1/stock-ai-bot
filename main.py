@@ -19,9 +19,24 @@ try:
 except FileNotFoundError:
     TICKERS = ["AAPL"]
 
-BEST_MODELS = ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-pro"]
+# 3. 내 API 키로 쓸 수 있는 AI 모델 '자동 검색' (에러 원천 차단)
+valid_models = []
+try:
+    list_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={GEMINI_API_KEY}"
+    list_res = requests.get(list_url).json()
+    if "models" in list_res:
+        for m in list_res["models"]:
+            # 텍스트를 생성할 수 있는 모델들만 싹 다 모아오기
+            if "generateContent" in m.get("supportedGenerationMethods", []):
+                valid_models.append(m["name"].split("/")[-1])
+except Exception:
+    pass
 
-# 3. 종목별 개별 분석 시작
+# 만약 구글이 목록을 안 주면 최후의 기본값 세팅
+if not valid_models:
+    valid_models = ["gemini-1.5-flash", "gemini-pro"]
+
+# 4. 종목별 개별 분석 시작
 for ticker in TICKERS:
     try:
         # 야후 파이낸스 데이터 가져오기
@@ -39,7 +54,7 @@ for ticker in TICKERS:
         
         stock_data = f"현재가: ${price}\nPER: {per} (내년 예상: {f_per})\nPBR: {pbr}\nROE: {roe}%\n부채비율: {debt}%\n배당수익률: {div}%"
         
-        # ★ AI 두뇌 업그레이드: ETF와 커버드콜을 스스로 파악하고 본주를 분석하도록 지시 ★
+        # ETF/커버드콜 맞춤형 초지능 프롬프트
         prompt = f"""
         너는 주식 초보자를 위한 수석 투자 전략가야. 
         반드시 100% '한국어'로만 대답하고, 초보자가 스마트폰에서 읽기 편하게 작성해.
@@ -55,29 +70,29 @@ for ticker in TICKERS:
         {stock_data}
         """
         
-        # AI 분석 요청
+        # 5. 찾아낸 모든 AI 모델들을 성공할 때까지 하나씩 찔러보기
         ai_analysis = ""
-        for model in BEST_MODELS:
-            ai_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_API_KEY}"
+        for model_name in valid_models:
+            ai_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
             payload = {"contents": [{"parts": [{"text": prompt}]}]}
             res = requests.post(ai_url, headers={'Content-Type': 'application/json'}, json=payload)
             res_json = res.json()
             
             if "candidates" in res_json:
                 ai_analysis = res_json['candidates'][0]['content']['parts'][0]['text']
-                break 
+                break # ◀ 분석에 성공하면 뒤에 남은 모델들은 무시하고 즉시 다음 주식으로 넘어감
             else:
-                ai_analysis = f"AI 서버 거절 사유 ({model}): {res.text}"
+                ai_analysis = f"AI 서버 거절 사유 ({model_name}): {res.text}"
                 
     except Exception as e:
         stock_data = "데이터를 불러오는 중 오류가 발생했습니다."
         ai_analysis = f"오류 원인: {e}"
 
-    # 4. 최종 메시지 조립 및 발송
+    # 6. 최종 메시지 조립 및 텔레그램 발송
     final_message = f"⏰ [작성 일시: {current_time}]\n\n🔎 [{name} ({ticker})] 핵심 지표\n{stock_data}\n\n🤖 [AI 멘토 의견]\n{ai_analysis}"
     
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     requests.post(url, data={"chat_id": CHAT_ID, "text": final_message})
     
-    # API 과부하 방지 (5초 대기)
+    # 구글 서버 과부하 막기 (5초 대기)
     time.sleep(5)
