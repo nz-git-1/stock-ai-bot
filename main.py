@@ -4,7 +4,6 @@ import yfinance as yf
 import time
 from datetime import datetime, timezone, timedelta
 
-# 1. 실행 시간 (한국 시간 기준)
 kst = timezone(timedelta(hours=9))
 current_time = datetime.now(kst).strftime("%Y년 %m월 %d일 %H시 %M분")
 
@@ -18,6 +17,9 @@ try:
 except FileNotFoundError:
     TICKERS = ["AAPL"]
 
+if not TICKERS:
+    raise Exception("tickers.txt 파일이 비어있습니다. 종목을 입력해 주세요!")
+
 valid_models = ["gemini-1.5-flash", "gemini-pro"]
 try:
     list_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={GEMINI_API_KEY}"
@@ -27,7 +29,6 @@ try:
 except:
     pass
 
-# ★ 엔비디아 증발 완벽 차단: 이상한 데이터가 와도 에러 없이 "N/A"로 넘기는 철벽 함수 ★
 def get_val(info, key, multiplier=1):
     try:
         val = info.get(key)
@@ -57,7 +58,6 @@ for ticker in TICKERS:
             
         stock_data = f"현재가: {currency}{price}\nPER: {per} (내년 예상: {f_per})\nPBR: {pbr}\nROE: {roe}%\n부채비율: {debt}%\n배당수익률: {div}%"
         
-        # ★ AI 헛소리 완벽 차단: 영어 금지, 수치 반복 금지를 매우 짧게 강제 ★
         prompt = f"""주식 데이터를 바탕으로 초보자에게 딱 2가지만 한국어로 설명하세요.
 주의: 영어 절대 금지. 내가 입력한 지시문 반복 출력 절대 금지. 수치(PER 등) 반복 언급 금지. 결과만 출력할 것.
 
@@ -74,7 +74,7 @@ for ticker in TICKERS:
             ai_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
             payload = {
                 "contents": [{"parts": [{"text": prompt}]}],
-                "generationConfig": {"temperature": 0.1} # 헛소리(창의성) 방지
+                "generationConfig": {"temperature": 0.1}
             }
             res = requests.post(ai_url, headers={'Content-Type': 'application/json'}, json=payload)
             res_json = res.json()
@@ -92,6 +92,10 @@ for ticker in TICKERS:
     final_message = f"⏰ [작성 일시: {current_time}]\n\n🔎 [{name} ({ticker})] 핵심 지표\n{stock_data}\n\n🤖 [AI 멘토 의견]\n{ai_analysis}"
     
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    requests.post(url, data={"chat_id": CHAT_ID, "text": final_message})
+    t_res = requests.post(url, data={"chat_id": CHAT_ID, "text": final_message})
     
+    # ★ 텔레그램 발송 실패 시 에러를 띄우고 즉시 정지시킵니다 ★
+    if t_res.status_code != 200:
+        raise Exception(f"\n\n🚨 텔레그램 발송 실패 🚨\n종목명: {ticker}\n사유: {t_res.text}\n")
+        
     time.sleep(5)
