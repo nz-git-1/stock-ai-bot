@@ -4,6 +4,7 @@ import yfinance as yf
 import time
 from datetime import datetime, timezone, timedelta
 
+# 1. 한국 시간 설정
 kst = timezone(timedelta(hours=9))
 current_time = datetime.now(kst).strftime("%Y년 %m월 %d일 %H시 %M분")
 
@@ -11,6 +12,7 @@ TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
+# 2. 티커 파일 읽기
 try:
     with open("tickers.txt", "r") as f:
         TICKERS = [line.strip().upper() for line in f if line.strip()]
@@ -20,6 +22,7 @@ except FileNotFoundError:
 if not TICKERS:
     raise Exception("tickers.txt 파일이 비어있습니다. 종목을 입력해 주세요!")
 
+# 3. AI 모델 자동 찾기
 valid_models = ["gemini-1.5-flash", "gemini-pro"]
 try:
     list_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={GEMINI_API_KEY}"
@@ -29,6 +32,7 @@ try:
 except:
     pass
 
+# 4. 숫자 데이터 철벽 방어 함수
 def get_val(info, key, multiplier=1):
     try:
         val = info.get(key)
@@ -37,12 +41,14 @@ def get_val(info, key, multiplier=1):
     except:
         return "N/A"
 
+# 5. 종목별 분석 시작
 for ticker in TICKERS:
     try:
         stock = yf.Ticker(ticker)
         info = stock.info
         name = info.get("shortName", ticker) if isinstance(info, dict) else ticker
         
+        # 화폐 기호 처리
         currency = "₩" if ticker.endswith(".KS") or ticker.endswith(".KQ") else "$"
         
         if isinstance(info, dict):
@@ -74,7 +80,7 @@ for ticker in TICKERS:
             ai_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
             payload = {
                 "contents": [{"parts": [{"text": prompt}]}],
-                "generationConfig": {"temperature": 0.1}
+                "generationConfig": {"temperature": 0.1} # AI 헛소리 통제
             }
             res = requests.post(ai_url, headers={'Content-Type': 'application/json'}, json=payload)
             res_json = res.json()
@@ -89,12 +95,16 @@ for ticker in TICKERS:
         stock_data = "데이터 수집 오류 발생"
         ai_analysis = f"오류 원인: {e}"
 
+    # 메시지 조립
     final_message = f"⏰ [작성 일시: {current_time}]\n\n🔎 [{name} ({ticker})] 핵심 지표\n{stock_data}\n\n🤖 [AI 멘토 의견]\n{ai_analysis}"
     
+    # ★ 텔레그램 글자 수 4,000자 초과 방어막 (이게 빠져서 그동안 에러가 났습니다!) ★
+    if len(final_message) > 4000:
+        final_message = final_message[:3900] + "\n\n(※ AI 분석이 너무 길어 일부 생략됨)"
+
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     t_res = requests.post(url, data={"chat_id": CHAT_ID, "text": final_message})
     
-    # ★ 텔레그램 발송 실패 시 에러를 띄우고 즉시 정지시킵니다 ★
     if t_res.status_code != 200:
         raise Exception(f"\n\n🚨 텔레그램 발송 실패 🚨\n종목명: {ticker}\n사유: {t_res.text}\n")
         
