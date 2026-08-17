@@ -63,7 +63,7 @@ for ticker in TICKERS:
             try:
                 stock = yf.Ticker(ticker)
                 info = stock.info
-                # ★ 실시간 최신 뉴스 데이터 가져오기 기능 추가 ★
+                # 실시간 최신 뉴스 데이터 가져오기
                 news_list = stock.news 
                 if info: break
             except Exception:
@@ -82,7 +82,7 @@ for ticker in TICKERS:
             roe = get_val(info, "returnOnEquity", 100)
             debt = get_val(info, "debtToEquity")
             
-            # 배당수익률 자체 검증 로직
+            # 배당수익률 자체 검증 로직 유지
             div = "N/A"
             try:
                 div_rate = info.get("dividendRate")
@@ -101,7 +101,7 @@ for ticker in TICKERS:
             
         stock_data = f"현재가: {currency}{price}\nPER: {per} (내년 예상: {f_per})\nPBR: {pbr}\nROE: {roe}%\n부채비율: {debt}%\n배당수익률: {div}%"
         
-        # ★ 당일 뉴스 텍스트 조립 (최대 3개) ★
+        # ★ '당일'을 삭제하고 시간에 상관없이 '최신 주요 뉴스'로 수집하도록 변경 ★
         news_text = ""
         if news_list:
             for n in news_list[:3]:
@@ -110,15 +110,15 @@ for ticker in TICKERS:
                 if title:
                     news_text += f"- [{publisher}] {title}\n"
         if not news_text:
-            news_text = "당일 주요 뉴스 없음"
+            news_text = "최신 주요 뉴스 없음"
         
-        # ★ 프롬프트에 [최신 주요 뉴스] 섹션 및 목차 추가 ★
+        # ★ AI에게도 '당일 뉴스'가 아닌 '최신 뉴스'를 바탕으로 분석하라고 지시 수정 ★
         prompt = f"""당신은 기관 투자자를 담당하는 여의도 수석 주식 애널리스트입니다.
-제공된 실시간 재무 데이터와 '당일 최신 뉴스'를 엄격하게 종합하여 심층 분석 리포트를 작성하십시오.
+제공된 실시간 재무 데이터와 '최신 주요 뉴스'를 엄격하게 종합하여 심층 분석 리포트를 작성하십시오.
 
 [절대 분석 지침 - 100% 팩트 기반]
 1. 배당수익률, PER 등 수치와 시장 예측은 제공된 데이터와 최신 팩트를 기반으로 교차 검증하십시오.
-2. [최신 주요 뉴스]에 제공된 이슈를 분석하여 '단기 모멘텀 및 당일 이슈'를 반드시 리포트에 반영하십시오.
+2. [최신 주요 뉴스]에 제공된 이슈를 분석하여 '단기 모멘텀 및 최신 이슈'를 반드시 리포트에 반영하십시오.
 3. 100% 한국어 전문 금융 용어로 격식 있게 서술하며, 인사말이나 불필요한 서론은 일절 배제하십시오.
 4. 아래 [출력 양식]의 5개 항목을 빠짐없이 유지하여 작성하십시오.
 
@@ -131,7 +131,7 @@ for ticker in TICKERS:
 
 [출력 양식]
 📰 최신 이슈 및 단기 모멘텀:
-(제공된 최신 뉴스를 바탕으로 당일 시장의 주목을 받는 이슈와 단기 주가 방향성 분석)
+(제공된 최신 뉴스를 바탕으로 현재 시장의 주목을 받는 이슈와 단기 주가 방향성 분석)
 
 🏰 비즈니스 해자 및 펀더멘털:
 (시장 점유율, 독점적 지위, 진입 장벽, 주요 사업부별 수익 구조 분석)
@@ -143,7 +143,7 @@ for ticker in TICKERS:
 (미국 기준금리, 국채 금리 추이, 연준 정책 기조 등 거시경제 변수 영향)
 
 🎯 지지선 대응 및 투자 전략:
-(현재가 기준 1차·2차 분할 매수 지지선, 리스크 관리 시그널 및 최종 투자 포지션 제안)"""
+(현재가 기준 현실적인 1차·2차 분할 매수 지지선, 리스크 관리 시그널 및 최종 투자 포지션 제안)"""
         
         ai_analysis = ask_ai(prompt)
 
@@ -152,8 +152,8 @@ for ticker in TICKERS:
         news_text = "뉴스 데이터 수집 실패"
         ai_analysis = f"오류 원인: {e}"
 
-    # 최종 텔레그램 메시지 조립 (뉴스 헤드라인 원본도 함께 발송)
-    final_message = f"⏰ [작성 일시: {current_time}]\n\n🔎 [{name} ({ticker})] 핵심 지표\n{stock_data}\n\n🗞️ [오늘의 주요 뉴스]\n{news_text}\n\n🏛️ [기관 심층 분석 리포트]\n{ai_analysis}"
+    # 최종 텔레그램 메시지 조립
+    final_message = f"⏰ [작성 일시: {current_time}]\n\n🔎 [{name} ({ticker})] 핵심 지표\n{stock_data}\n\n🗞️ [최신 주요 뉴스]\n{news_text}\n\n🏛️ [기관 심층 분석 리포트]\n{ai_analysis}"
 
     if len(final_message) > 4000:
         final_message = final_message[:3900] + "\n\n(※ 내용 초과로 일부 요약됨)"
