@@ -4,6 +4,7 @@ import yfinance as yf
 import time
 import urllib.parse
 import xml.etree.ElementTree as ET
+import re  # ★ 텍스트 추출을 위한 정규표현식 라이브러리 추가
 from datetime import datetime, timezone, timedelta
 
 # 1. 한국 시간 설정
@@ -70,18 +71,29 @@ for ticker in TICKERS:
         
         if info is None: info = {}
 
+        # 기본 이름은 야후 데이터(예: SamsungElec)를 사용하지만, 아래에서 한글로 바꿉니다.
         name = info.get("shortName", ticker) if isinstance(info, dict) else ticker
         currency = "₩" if ticker.endswith(".KS") or ticker.endswith(".KQ") else "$"
         
         # =====================================================================
-        # ★ 안정성 강화: 모든 종목에 대해 '기업 이름' 대신 '티커/코드'로만 뉴스 검색 ★
+        # ★ 완벽 해결: 네이버 금융에서 실제 '한글 이름'을 찾아 검색에 활용 ★
         # =====================================================================
         news_list = []
         try:
             if ticker.endswith(".KS") or ticker.endswith(".KQ"):
-                # 한국 주식: 이름 오류 방지를 위해 무조건 '6자리 숫자 코드'로 검색
-                search_keyword = ticker.split('.')[0]
-                encoded_query = urllib.parse.quote(search_keyword)
+                korean_code = ticker.split('.')[0]
+                
+                # 1. 네이버 금융 페이지에 접속해서 실제 한글 이름 가져오기
+                finance_url = f"https://finance.naver.com/item/main.naver?code={korean_code}"
+                fin_res = requests.get(finance_url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
+                
+                # <title>삼성전자 : 네이버페이 증권</title> 에서 '삼성전자'만 빼옵니다.
+                match = re.search(r'<title>(.*?)\s*:\s*네이버', fin_res.text)
+                if match:
+                    name = match.group(1).strip()  # 텔레그램 제목도 예쁜 '한글 이름'으로 교체!
+                
+                # 2. 찾은 정확한 한글 이름으로 네이버 뉴스 RSS 검색
+                encoded_query = urllib.parse.quote(name)
                 url = f"https://news.search.naver.com/news.naver?where=rss&query={encoded_query}"
                 
                 res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
@@ -90,7 +102,7 @@ for ticker in TICKERS:
                     title = item.find('title').text.replace('&quot;', '"').replace('<b>', '').replace('</b>', '').replace('&apos;', "'").replace('&amp;', '&')
                     news_list.append({"title": title})
             else:
-                # 글로벌 주식: 이름 오류 방지를 위해 야후 shortName 대신 '원래 티커(예: AAPL)'를 직접 사용
+                # 미국 및 글로벌 주식: 고유 티커명 그대로 구글 뉴스 검색
                 encoded_query = urllib.parse.quote(f"{ticker} stock")
                 url = f"https://news.google.com/rss/search?q={encoded_query}&hl=en-US&gl=US&ceid=US:en"
                 
