@@ -64,7 +64,6 @@ for ticker in TICKERS:
             try:
                 stock = yf.Ticker(ticker)
                 info = stock.info
-                # 야후 파이낸스 뉴스는 부정확하므로 여기서 가져오지 않습니다.
                 if info: break
             except Exception:
                 time.sleep(1)
@@ -75,24 +74,26 @@ for ticker in TICKERS:
         currency = "₩" if ticker.endswith(".KS") or ticker.endswith(".KQ") else "$"
         
         # =====================================================================
-        # ★ 신규 기능: 국가별 맞춤 실시간 뉴스 RSS 크롤링 엔진 ★
+        # ★ 안정성 강화: 모든 종목에 대해 '기업 이름' 대신 '티커/코드'로만 뉴스 검색 ★
         # =====================================================================
         news_list = []
         try:
             if ticker.endswith(".KS") or ticker.endswith(".KQ"):
-                # 1. 한국 주식: 네이버 뉴스 실시간 검색
-                encoded_name = urllib.parse.quote(name)
-                url = f"https://news.search.naver.com/news.naver?where=rss&query={encoded_name}"
+                # 한국 주식: 이름 오류 방지를 위해 무조건 '6자리 숫자 코드'로 검색
+                search_keyword = ticker.split('.')[0]
+                encoded_query = urllib.parse.quote(search_keyword)
+                url = f"https://news.search.naver.com/news.naver?where=rss&query={encoded_query}"
+                
                 res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
                 root = ET.fromstring(res.text)
                 for item in root.findall('.//item')[:3]:
-                    # HTML 특수문자 깔끔하게 치환
                     title = item.find('title').text.replace('&quot;', '"').replace('<b>', '').replace('</b>', '').replace('&apos;', "'").replace('&amp;', '&')
                     news_list.append({"title": title})
             else:
-                # 2. 미국 및 글로벌 주식: 구글 뉴스(US) 실시간 검색
-                encoded_query = urllib.parse.quote(f"{name} stock")
+                # 글로벌 주식: 이름 오류 방지를 위해 야후 shortName 대신 '원래 티커(예: AAPL)'를 직접 사용
+                encoded_query = urllib.parse.quote(f"{ticker} stock")
                 url = f"https://news.google.com/rss/search?q={encoded_query}&hl=en-US&gl=US&ceid=US:en"
+                
                 res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
                 root = ET.fromstring(res.text)
                 for item in root.findall('.//channel/item')[:3]:
@@ -129,7 +130,6 @@ for ticker in TICKERS:
             
         stock_data = f"현재가: {currency}{price}\nPER: {per} (내년 예상: {f_per})\nPBR: {pbr}\nROE: {roe}%\n부채비율: {debt}%\n배당수익률: {div}%"
         
-        # 뉴스 텍스트 조립
         news_text = ""
         if news_list:
             for n in news_list[:3]:
@@ -178,7 +178,6 @@ for ticker in TICKERS:
         news_text = "뉴스 데이터 수집 실패"
         ai_analysis = f"오류 원인: {e}"
 
-    # 최종 텔레그램 메시지 조립
     final_message = f"⏰ [작성 일시: {current_time}]\n\n🔎 [{name} ({ticker})] 핵심 지표\n{stock_data}\n\n🗞️ [최신 주요 뉴스]\n{news_text}\n\n🏛️ [기관 심층 분석 리포트]\n{ai_analysis}"
 
     if len(final_message) > 4000:
