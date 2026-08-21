@@ -2,6 +2,8 @@ import os
 import requests
 import yfinance as yf
 import time
+import urllib.parse
+import xml.etree.ElementTree as ET
 from datetime import datetime, timezone, timedelta
 
 # 1. 한국 시간 설정
@@ -58,13 +60,11 @@ def ask_ai(prompt):
 for ticker in TICKERS:
     try:
         info = None
-        news_list = []
         for _ in range(2):
             try:
                 stock = yf.Ticker(ticker)
                 info = stock.info
-                # 실시간 최신 뉴스 데이터 가져오기
-                news_list = stock.news 
+                # 야후 파이낸스 뉴스는 부정확하므로 여기서 가져오지 않습니다.
                 if info: break
             except Exception:
                 time.sleep(1)
@@ -74,6 +74,35 @@ for ticker in TICKERS:
         name = info.get("shortName", ticker) if isinstance(info, dict) else ticker
         currency = "₩" if ticker.endswith(".KS") or ticker.endswith(".KQ") else "$"
         
+        # =====================================================================
+        # ★ 신규 기능: 국가별 맞춤 실시간 뉴스 RSS 크롤링 엔진 ★
+        # =====================================================================
+        news_list = []
+        try:
+            if ticker.endswith(".KS") or ticker.endswith(".KQ"):
+                # 1. 한국 주식: 네이버 뉴스 실시간 검색
+                encoded_name = urllib.parse.quote(name)
+                url = f"https://news.search.naver.com/news.naver?where=rss&query={encoded_name}"
+                res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
+                root = ET.fromstring(res.text)
+                for item in root.findall('.//item')[:3]:
+                    # HTML 특수문자 깔끔하게 치환
+                    title = item.find('title').text.replace('&quot;', '"').replace('<b>', '').replace('</b>', '').replace('&apos;', "'").replace('&amp;', '&')
+                    news_list.append({"title": title})
+            else:
+                # 2. 미국 및 글로벌 주식: 구글 뉴스(US) 실시간 검색
+                encoded_query = urllib.parse.quote(f"{name} stock")
+                url = f"https://news.google.com/rss/search?q={encoded_query}&hl=en-US&gl=US&ceid=US:en"
+                res = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
+                root = ET.fromstring(res.text)
+                for item in root.findall('.//channel/item')[:3]:
+                    title = item.find('title').text
+                    news_list.append({"title": title})
+        except Exception as e:
+            print(f"뉴스 수집 에러 ({ticker}): {e}")
+            pass
+        # =====================================================================
+
         if isinstance(info, dict) and info:
             price = info.get("currentPrice") or info.get("regularMarketPrice") or info.get("navPrice") or "N/A"
             per = get_val(info, "trailingPE")
@@ -82,7 +111,6 @@ for ticker in TICKERS:
             roe = get_val(info, "returnOnEquity", 100)
             debt = get_val(info, "debtToEquity")
             
-            # 배당수익률 자체 검증 로직 유지
             div = "N/A"
             try:
                 div_rate = info.get("dividendRate")
@@ -101,18 +129,16 @@ for ticker in TICKERS:
             
         stock_data = f"현재가: {currency}{price}\nPER: {per} (내년 예상: {f_per})\nPBR: {pbr}\nROE: {roe}%\n부채비율: {debt}%\n배당수익률: {div}%"
         
-        # ★ '당일'을 삭제하고 시간에 상관없이 '최신 주요 뉴스'로 수집하도록 변경 ★
+        # 뉴스 텍스트 조립
         news_text = ""
         if news_list:
             for n in news_list[:3]:
                 title = n.get("title", "")
-                publisher = n.get("publisher", "")
                 if title:
-                    news_text += f"- [{publisher}] {title}\n"
+                    news_text += f"- {title}\n"
         if not news_text:
             news_text = "최신 주요 뉴스 없음"
         
-        # ★ AI에게도 '당일 뉴스'가 아닌 '최신 뉴스'를 바탕으로 분석하라고 지시 수정 ★
         prompt = f"""당신은 기관 투자자를 담당하는 여의도 수석 주식 애널리스트입니다.
 제공된 실시간 재무 데이터와 '최신 주요 뉴스'를 엄격하게 종합하여 심층 분석 리포트를 작성하십시오.
 
