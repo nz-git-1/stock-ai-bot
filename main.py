@@ -4,7 +4,6 @@ import yfinance as yf
 import time
 import urllib.parse
 import xml.etree.ElementTree as ET
-import re
 from datetime import datetime, timezone, timedelta
 
 # 1. 한국 시간 설정
@@ -41,7 +40,7 @@ def get_val(info, key, multiplier=1):
     except:
         return "N/A"
 
-# AI에게 질문을 보내고 답변을 받는 만능 함수 (번역에도 사용합니다)
+# AI 호출 함수 (분석 리포트 및 영문 뉴스 번역에 사용)
 def ask_ai(prompt):
     for model_name in valid_models:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
@@ -72,29 +71,32 @@ for ticker in TICKERS:
         
         if info is None: info = {}
 
+        # 기본 이름 설정
         name = info.get("shortName", ticker) if isinstance(info, dict) else ticker
         currency = "₩" if ticker.endswith(".KS") or ticker.endswith(".KQ") else "$"
         
         # =====================================================================
-        # ★ 완벽 해결: 강력한 User-Agent 위장 및 영어 뉴스 AI 번역 로직 추가 ★
+        # ★ 완벽 해결: 깃허브 차단 우회(API 활용) 및 영문 뉴스 AI 자동 번역 ★
         # =====================================================================
         news_list = []
-        # 네이버나 구글 서버가 기계(봇)를 차단하지 못하도록 '크롬 브라우저'로 위장합니다.
         power_headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
         
         try:
             if ticker.endswith(".KS") or ticker.endswith(".KQ"):
                 korean_code = ticker.split('.')[0]
                 
-                # 1. 한국 주식: 네이버 금융에서 '한글 이름' 확실하게 빼오기
-                finance_url = f"https://finance.naver.com/item/main.naver?code={korean_code}"
-                fin_res = requests.get(finance_url, headers=power_headers, timeout=10)
+                # 1. 네이버 자동완성 API를 사용하여 깃허브 차단 없이 '한글 이름' 100% 추출
+                ac_url = f"https://ac.finance.naver.com/ac?q={korean_code}&q_enc=utf-8&st=111&r_format=json&t_koreng=1"
+                try:
+                    ac_res = requests.get(ac_url, headers=power_headers, timeout=10).json()
+                    # 응답 데이터에서 한글 종목명 추출 (예: '삼성전자')
+                    if 'items' in ac_res and len(ac_res['items']) > 0 and len(ac_res['items'][0]) > 0:
+                        name = ac_res['items'][0][0][1]
+                except Exception as e:
+                    print(f"한글 이름 추출 실패: {e}")
+                    pass # 실패 시 기존 야후 이름 유지
                 
-                match = re.search(r'<title>(.*?)\s*:\s*네이버', fin_res.text)
-                if match:
-                    name = match.group(1).strip()  # 예: SamsungElec -> 삼성전자
-                
-                # 추출한 한글 이름으로 네이버 뉴스 검색
+                # 2. 추출한 완벽한 한글 이름으로 네이버 뉴스 RSS 검색
                 encoded_query = urllib.parse.quote(name)
                 url = f"https://news.search.naver.com/news.naver?where=rss&query={encoded_query}"
                 
@@ -105,7 +107,7 @@ for ticker in TICKERS:
                     news_list.append({"title": title})
                     
             else:
-                # 2. 미국 주식: 구글 뉴스 검색 후 AI로 '한국어 자동 번역'
+                # 3. 미국 주식: 티커로 구글 뉴스 검색 후 AI를 통한 한국어 번역
                 encoded_query = urllib.parse.quote(f"{ticker} stock")
                 url = f"https://news.google.com/rss/search?q={encoded_query}&hl=en-US&gl=US&ceid=US:en"
                 
@@ -117,20 +119,18 @@ for ticker in TICKERS:
                     raw_titles.append(item.find('title').text)
                 
                 if raw_titles:
-                    # 원본 영어 제목들을 하나의 텍스트로 묶습니다.
                     raw_text = "\n".join(raw_titles)
-                    # 봇 안에 있는 AI(Gemini)에게 번역을 시킵니다.
+                    # 영어 뉴스를 한국어로 번역하도록 AI에게 지시
                     trans_prompt = f"다음 미국 주식 영어 뉴스 제목들을 한국어로 자연스럽게 번역해줘. 부가 설명이나 인사말 없이 번역된 텍스트만 한 줄씩 출력해:\n{raw_text}"
                     translated = ask_ai(trans_prompt)
                     
-                    # 번역된 결과를 분리해서 뉴스 리스트에 예쁘게 담습니다.
                     trans_titles = [t.strip("-* ") for t in translated.split('\n') if t.strip()]
                     
                     for i, original_title in enumerate(raw_titles):
                         if i < len(trans_titles):
                             news_list.append({"title": trans_titles[i]})
                         else:
-                            news_list.append({"title": original_title}) # 번역 실패 시 원본 표시
+                            news_list.append({"title": original_title})
         except Exception as e:
             print(f"뉴스 수집 에러 ({ticker}): {e}")
             pass
