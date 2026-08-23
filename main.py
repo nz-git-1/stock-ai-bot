@@ -4,6 +4,7 @@ import yfinance as yf
 import time
 import urllib.parse
 import xml.etree.ElementTree as ET
+import re
 from datetime import datetime, timezone, timedelta
 
 # 1. 한국 시간 설정
@@ -71,12 +72,11 @@ for ticker in TICKERS:
         
         if info is None: info = {}
 
-        # 기본 이름 설정
         name = info.get("shortName", ticker) if isinstance(info, dict) else ticker
         currency = "₩" if ticker.endswith(".KS") or ticker.endswith(".KQ") else "$"
         
         # =====================================================================
-        # ★ 완벽 해결: 깃허브 차단 우회(API 활용) 및 영문 뉴스 AI 자동 번역 ★
+        # ★ 완벽 해결 1: 구글 파이낸스 & 구글 뉴스 코리아 기반 검색 엔진 탑재 ★
         # =====================================================================
         news_list = []
         power_headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
@@ -84,21 +84,22 @@ for ticker in TICKERS:
         try:
             if ticker.endswith(".KS") or ticker.endswith(".KQ"):
                 korean_code = ticker.split('.')[0]
+                market = "KRX" if ticker.endswith(".KS") else "KOSDAQ"
                 
-                # 1. 네이버 자동완성 API를 사용하여 깃허브 차단 없이 '한글 이름' 100% 추출
-                ac_url = f"https://ac.finance.naver.com/ac?q={korean_code}&q_enc=utf-8&st=111&r_format=json&t_koreng=1"
+                # 1. 차단이 없는 구글 파이낸스에서 완벽한 '한글 이름' 추출
+                gf_url = f"https://www.google.com/finance/quote/{korean_code}:{market}"
                 try:
-                    ac_res = requests.get(ac_url, headers=power_headers, timeout=10).json()
-                    # 응답 데이터에서 한글 종목명 추출 (예: '삼성전자')
-                    if 'items' in ac_res and len(ac_res['items']) > 0 and len(ac_res['items'][0]) > 0:
-                        name = ac_res['items'][0][0][1]
+                    gf_res = requests.get(gf_url, headers=power_headers, timeout=10)
+                    match = re.search(r'<title>(.*?)\s+주가', gf_res.text)
+                    if match:
+                        name = match.group(1).strip()
                 except Exception as e:
-                    print(f"한글 이름 추출 실패: {e}")
-                    pass # 실패 시 기존 야후 이름 유지
+                    print(f"구글 파이낸스 이름 추출 실패: {e}")
+                    pass
                 
-                # 2. 추출한 완벽한 한글 이름으로 네이버 뉴스 RSS 검색
-                encoded_query = urllib.parse.quote(name)
-                url = f"https://news.search.naver.com/news.naver?where=rss&query={encoded_query}"
+                # 2. 구글 뉴스(한국 전용 RSS)에 6자리 종목 코드를 검색하여 기사 추출
+                encoded_query = urllib.parse.quote(korean_code)
+                url = f"https://news.google.com/rss/search?q={encoded_query}&hl=ko&gl=KR&ceid=KR:ko"
                 
                 res = requests.get(url, headers=power_headers, timeout=10)
                 root = ET.fromstring(res.text)
@@ -107,7 +108,7 @@ for ticker in TICKERS:
                     news_list.append({"title": title})
                     
             else:
-                # 3. 미국 주식: 티커로 구글 뉴스 검색 후 AI를 통한 한국어 번역
+                # 3. 미국 주식: 티커로 구글 뉴스(미국) 검색 후 AI를 통한 한국어 번역
                 encoded_query = urllib.parse.quote(f"{ticker} stock")
                 url = f"https://news.google.com/rss/search?q={encoded_query}&hl=en-US&gl=US&ceid=US:en"
                 
@@ -120,7 +121,6 @@ for ticker in TICKERS:
                 
                 if raw_titles:
                     raw_text = "\n".join(raw_titles)
-                    # 영어 뉴스를 한국어로 번역하도록 AI에게 지시
                     trans_prompt = f"다음 미국 주식 영어 뉴스 제목들을 한국어로 자연스럽게 번역해줘. 부가 설명이나 인사말 없이 번역된 텍스트만 한 줄씩 출력해:\n{raw_text}"
                     translated = ask_ai(trans_prompt)
                     
@@ -136,11 +136,32 @@ for ticker in TICKERS:
             pass
         # =====================================================================
 
+        # =====================================================================
+        # ★ 완벽 해결 2: PER, PBR 누락 시 자체 수식 계산 알고리즘 추가 ★
+        # =====================================================================
         if isinstance(info, dict) and info:
-            price = info.get("currentPrice") or info.get("regularMarketPrice") or info.get("navPrice") or "N/A"
-            per = get_val(info, "trailingPE")
+            price = info.get("currentPrice") or info.get("regularMarketPrice") or info.get("navPrice")
+            
+            per = info.get("trailingPE")
+            # 야후가 PER을 안 주면, 현재가 / EPS 로 직접 계산합니다.
+            if per is None and price and info.get("trailingEps"):
+                try:
+                    per = round(float(price) / float(info.get("trailingEps")), 2)
+                except:
+                    pass
+            per = get_val({"val": per}, "val") if per is not None else "N/A"
+            
             f_per = get_val(info, "forwardPE")
-            pbr = get_val(info, "priceToBook")
+            
+            pbr = info.get("priceToBook")
+            # 야후가 PBR을 안 주면, 현재가 / 주당순자산(BookValue) 로 직접 계산합니다.
+            if pbr is None and price and info.get("bookValue"):
+                try:
+                    pbr = round(float(price) / float(info.get("bookValue")), 2)
+                except:
+                    pass
+            pbr = get_val({"val": pbr}, "val") if pbr is not None else "N/A"
+            
             roe = get_val(info, "returnOnEquity", 100)
             debt = get_val(info, "debtToEquity")
             
@@ -157,6 +178,8 @@ for ticker in TICKERS:
                         div = temp_div
             except:
                 pass
+            
+            price = get_val({"val": price}, "val") if price else "N/A"
         else:
             price = per = f_per = pbr = roe = debt = div = "N/A"
             
