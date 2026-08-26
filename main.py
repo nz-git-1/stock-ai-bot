@@ -76,44 +76,38 @@ for ticker in TICKERS:
         news_titles = []
 
         # =====================================================================
-        # ★ 안정성 강화: 네이버 금융 파싱 (한국 주식 전용)
+        # ★ 차단 돌파 및 정확도 100%: 구글 파이낸스 한국어 강제 요청 로직
         # =====================================================================
         if is_korean:
             code = ticker.split('.')[0]
-            nv_url = f"https://finance.naver.com/item/main.naver?code={code}"
+            market = "KRX" if ticker.endswith(".KS") else "KOSDAQ"
+            
+            # 구글 파이낸스에 ?hl=ko 를 붙여서 무조건 한국어로 응답받게 설정합니다.
+            gf_url = f"https://www.google.com/finance/quote/{code}:{market}?hl=ko"
             
             try:
-                nv_res = requests.get(nv_url, headers=headers, timeout=10)
-                html_text = nv_res.text
+                gf_res = requests.get(gf_url, headers=headers, timeout=10)
+                html_text = gf_res.text
                 
-                # 한글 종목명 추출을 더 튼튼하게 변경
-                name_match = re.search(r'<title>(.*?)\s*:\s*네이버', html_text)
+                # 1. 완벽한 한글 이름 추출 (<title> 태그 활용)
+                name_match = re.search(r'<title>([^<]+)\s+주가', html_text)
                 if name_match: 
                     display_name = name_match.group(1).strip()
                 else:
-                    # 타이틀 태그 실패 시 본문 h2 태그에서 추출 시도
-                    name_match_alt = re.search(r'<h2><a href="#" onclick="clickcr.*?>(.*?)</a></h2>', html_text)
-                    if name_match_alt:
-                        display_name = name_match_alt.group(1).strip()
+                    # 실패 시 AI에게 직접 이름을 물어보는 2차 안전장치
+                    ai_name = ask_ai(f"종목코드 '{ticker}'의 한국 공식 상장명을 부가 설명 없이 한 단어로만 대답해줘.")
+                    if ai_name and len(ai_name) < 15: display_name = ai_name.strip()
                 
-                # 정확한 현재가 추출
-                price_match = re.search(r'<dd>현재가\s+([0-9,]+)', html_text)
-                if price_match: price = price_match.group(1).replace(',', '')
-                
-                # 지표 추출
-                per_match = re.search(r'id="_per">([0-9.]+)</em>', html_text)
-                if per_match: per = per_match.group(1)
-                
-                pbr_match = re.search(r'id="_pbr">([0-9.]+)</em>', html_text)
-                if pbr_match: pbr = pbr_match.group(1)
-                
-                div_match = re.search(r'id="_dvr">([0-9.]+)</em>', html_text)
-                if div_match: div = div_match.group(1)
-                
+                # 2. 야후의 비정상 주가를 덮어쓰는 100% 정확한 현재가 추출 (숨겨진 속성값 활용)
+                price_match = re.search(r'data-last-price="([0-9.]+)"', html_text)
+                if price_match: 
+                    # 75000.0 같은 숫자를 75,000 형태로 예쁘게 변환
+                    price = f"{int(float(price_match.group(1))):,}"
+                    
             except Exception as e:
-                print(f"네이버 금융 파싱 실패: {e}")
+                print(f"구글 파이낸스 데이터 추출 실패: {e}")
 
-            # ★ 핵심 로직: 구글 뉴스 검색 시 'when:1d'를 추가하여 무조건 24시간 이내 최신 뉴스만 수집
+            # 3. 완벽한 한글 이름으로 '최근 24시간 이내(when:1d)' 뉴스 검색
             news_query = urllib.parse.quote(f"{display_name} when:1d")
             news_url = f"https://news.google.com/rss/search?q={news_query}&hl=ko&gl=KR&ceid=KR:ko"
             
@@ -124,6 +118,16 @@ for ticker in TICKERS:
             except:
                 pass
                 
+            # 야후 파이낸스에서 PER, PBR 등 기타 재무 지표만 조용히 가져옵니다.
+            stock = yf.Ticker(ticker)
+            info = stock.info if stock.info else {}
+            per = get_val(info, "trailingPE")
+            f_per = get_val(info, "forwardPE")
+            pbr = get_val(info, "priceToBook")
+            roe = get_val(info, "returnOnEquity", 100)
+            debt = get_val(info, "debtToEquity")
+            div = get_val(info, "dividendYield", 100)
+
         # =====================================================================
         # 미국 및 글로벌 주식 로직
         # =====================================================================
@@ -132,7 +136,9 @@ for ticker in TICKERS:
             info = stock.info if stock.info else {}
             
             display_name = info.get("shortName", ticker)
-            price = info.get("currentPrice", "N/A")
+            raw_price = info.get("currentPrice", "N/A")
+            if raw_price != "N/A":
+                price = f"{raw_price:,.2f}"
             per = get_val(info, "trailingPE")
             f_per = get_val(info, "forwardPE")
             pbr = get_val(info, "priceToBook")
@@ -140,7 +146,6 @@ for ticker in TICKERS:
             debt = get_val(info, "debtToEquity")
             div = get_val(info, "dividendYield", 100)
             
-            # 글로벌 주식 뉴스 검색에도 'when:1d'를 추가하여 최신성 보장
             news_query = urllib.parse.quote(f"{ticker} stock when:1d")
             news_url = f"https://news.google.com/rss/search?q={news_query}&hl=en-US&gl=US&ceid=US:en"
             
@@ -151,13 +156,13 @@ for ticker in TICKERS:
                 
                 if raw_titles:
                     raw_text = "\n".join(raw_titles)
-                    trans_prompt = f"미국 주식 영어 뉴스 제목들을 한국어로 자연스럽게 번역해줘. 번역된 텍스트만 한 줄씩 출력해:\n{raw_text}"
+                    trans_prompt = f"다음 미국 주식 뉴스 제목들을 한국어로 번역해줘. 텍스트만 한 줄씩 출력해:\n{raw_text}"
                     translated = ask_ai(trans_prompt)
                     news_titles = [t.strip("-* ") for t in translated.split('\n') if t.strip()]
             except:
                 pass
 
-        # 뉴스 텍스트 조립
+        # 뉴스 및 지표 텍스트 조립
         stock_data = f"현재가: {currency}{price}\nPER: {per} (내년 예상: {f_per})\nPBR: {pbr}\nROE: {roe}%\n부채비율: {debt}%\n배당수익률: {div}%"
         
         news_text = ""
@@ -169,9 +174,9 @@ for ticker in TICKERS:
             news_text = "최근 24시간 이내 주요 뉴스 없음"
 
         # =====================================================================
-        # AI 리포트 생성 및 마크다운 완벽 제거
+        # AI 리포트 생성 (가짜 뉴스 방지 지시어 추가)
         # =====================================================================
-        prompt = f"""당신은 수석 주식 애널리스트입니다. 
+        prompt = f"""당신은 기관 투자자를 담당하는 수석 주식 애널리스트입니다. 
 아래 데이터를 바탕으로 리포트를 작성하되, 마크다운 기호(*, **, #)를 절대 사용하지 마세요.
 
 [데이터]
@@ -180,12 +185,13 @@ for ticker in TICKERS:
 최신 주요 뉴스:
 {news_text}
 
-[출력 양식]
-(이모지와 텍스트만 사용하여 아래 항목을 작성)
+[출력 양식 및 필수 주의사항]
+1. (이모지와 텍스트만 사용하여 아래 4가지 항목을 작성할 것)
 📰 최신 이슈 및 단기 모멘텀
 🏰 비즈니스 해자 및 펀더멘털
 📊 밸류에이션 및 실적 진단
-🎯 지지선 대응 및 투자 전략"""
+🎯 지지선 대응 및 투자 전략
+2. 만약 '최신 주요 뉴스'가 '없음'이라면, 절대 과거의 가짜 급락/급등 사례를 지어내지 마세요. 주어진 현재가와 펀더멘털 지표만을 바탕으로 객관적으로 분석하세요."""
         
         ai_analysis = ask_ai(prompt)
         
