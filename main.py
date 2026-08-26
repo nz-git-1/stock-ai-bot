@@ -2,6 +2,9 @@ import os
 import requests
 import yfinance as yf
 import time
+import urllib.parse
+import xml.etree.ElementTree as ET
+import re
 from datetime import datetime, timezone, timedelta
 
 # 1. 한국 시간 설정
@@ -30,7 +33,6 @@ try:
 except:
     pass
 
-# AI 만능 호출 함수 (번역 및 리포트 작성용)
 def ask_ai(prompt):
     for model_name in valid_models:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
@@ -58,40 +60,88 @@ def get_val(info, key, multiplier=1):
 
 for ticker in TICKERS:
     try:
+        # 야후 파이낸스에서 기본 데이터 수집 (지표용)
         stock = yf.Ticker(ticker)
         info = stock.info if stock.info else {}
-        currency = "₩" if ticker.endswith(".KS") or ticker.endswith(".KQ") else "$"
         
-        # 1. 깃허브 차단 방지 및 이름 한글화 (AI 번역 활용)
-        base_name = info.get("shortName", ticker)
-        korean_name = base_name
-        if ticker.endswith(".KS") or ticker.endswith(".KQ"):
-            name_prompt = f"주식 종목코드 '{ticker}'의 한국 공식 상장명을 알려줘. 부가 설명 없이 오직 이름만 한 단어로 말해. (예: 삼성전자)"
-            ai_name = ask_ai(name_prompt)
-            if ai_name and "실패" not in ai_name and len(ai_name) < 15:
-                korean_name = ai_name
+        is_korean = ticker.endswith(".KS") or ticker.endswith(".KQ")
+        currency = "₩" if is_korean else "$"
+        
+        display_name = info.get("shortName", ticker)
+        price = info.get("currentPrice", "N/A")
+        
+        # GitHub Actions 차단 방지를 위한 범용 헤더
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+        news_titles = []
 
-        # 2. 정확한 현재가 추출 (.info 오류 회피)
-        try:
-            hist = stock.history(period="1d")
-            if not hist.empty:
-                price = round(hist['Close'].iloc[-1], 2)
-            else:
-                price = info.get("currentPrice", "N/A")
-        except Exception:
-            price = "N/A"
+        # =====================================================================
+        # ★ 핵심 로직: 한국 주식은 야후의 쓰레기 데이터를 버리고 구글 파이낸스 직결
+        # =====================================================================
+        if is_korean:
+            code = ticker.split('.')[0]
+            market = "KRX" if ticker.endswith(".KS") else "KOSDAQ"
+            
+            try:
+                # 구글 파이낸스 페이지 스크래핑 (차단율이 0에 가깝습니다)
+                gf_url = f"https://www.google.com/finance/quote/{code}:{market}"
+                gf_res = requests.get(gf_url, headers=headers, timeout=10)
+                
+                # 1. 완벽한 한글 이름 추출 (예: 삼성전자)
+                name_match = re.search(r'<div class="zzDege">([^<]+)</div>', gf_res.text)
+                if name_match:
+                    display_name = name_match.group(1).strip()
+                
+                # 2. 야후의 비정상 주가(257,000)를 덮어쓰는 정확한 현재가 추출
+                price_match = re.search(r'<div class="YMlKvd dsqFNI">₩?([^<]+)</div>', gf_res.text)
+                if price_match:
+                    price = price_match.group(1).replace(',', '').strip()
+            except Exception as e:
+                print(f"구글 파이낸스 데이터 수집 실패: {e}")
 
-        # 3. 핵심 지표 자체 연산 및 추출
+            # 3. 추출된 완벽한 한글 이름으로 구글 뉴스 검색
+            news_query = urllib.parse.quote(display_name)
+            news_url = f"https://news.google.com/rss/search?q={news_query}&hl=ko&gl=KR&ceid=KR:ko"
+            
+            try:
+                res = requests.get(news_url, headers=headers, timeout=10)
+                root = ET.fromstring(res.text)
+                news_titles = [item.find('title').text for item in root.findall('.//channel/item')[:3]]
+            except:
+                pass
+                
+        # =====================================================================
+        # 미국 및 글로벌 주식 로직
+        # =====================================================================
+        else:
+            news_query = urllib.parse.quote(f"{ticker} stock")
+            news_url = f"https://news.google.com/rss/search?q={news_query}&hl=en-US&gl=US&ceid=US:en"
+            
+            try:
+                res = requests.get(news_url, headers=headers, timeout=10)
+                root = ET.fromstring(res.text)
+                raw_titles = [item.find('title').text for item in root.findall('.//channel/item')[:3]]
+                
+                if raw_titles:
+                    raw_text = "\n".join(raw_titles)
+                    trans_prompt = f"다음 미국 주식 영어 뉴스 제목들을 한국어로 자연스럽게 번역해줘. 번역된 텍스트만 한 줄씩 출력해:\n{raw_text}"
+                    translated = ask_ai(trans_prompt)
+                    news_titles = [t.strip("-* ") for t in translated.split('\n') if t.strip()]
+            except:
+                pass
+
+        # 지표 정리 (PER, PBR 수동 계산 병행)
         eps = info.get("trailingEps")
         per = info.get("trailingPE")
         if per is None and price != "N/A" and eps and float(eps) > 0:
-            per = round(float(price) / float(eps), 2)
+            try: per = round(float(price) / float(eps), 2)
+            except: pass
         per = per if per is not None else "N/A"
 
         bv = info.get("bookValue")
         pbr = info.get("priceToBook")
         if pbr is None and price != "N/A" and bv and float(bv) > 0:
-            pbr = round(float(price) / float(bv), 2)
+            try: pbr = round(float(price) / float(bv), 2)
+            except: pass
         pbr = pbr if pbr is not None else "N/A"
         
         f_per = get_val(info, "forwardPE")
@@ -101,57 +151,46 @@ for ticker in TICKERS:
 
         stock_data = f"현재가: {currency}{price}\nPER: {per} (내년 예상: {f_per})\nPBR: {pbr}\nROE: {roe}%\n부채비율: {debt}%\n배당수익률: {div}%"
 
-        # 4. 차단 없는 야후 뉴스 수집 및 AI 자동 번역
+        # 뉴스 텍스트 조립
         news_text = ""
-        try:
-            raw_news = stock.news
-            if raw_news:
-                raw_titles = [n['title'] for n in raw_news[:3] if 'title' in n]
-                if raw_titles:
-                    raw_joined = "\n".join(raw_titles)
-                    trans_prompt = f"다음 주식 관련 영어 뉴스 제목들을 한국어로 자연스럽게 번역해줘. 부가 설명 없이 번역된 텍스트만 리스트 형태로 한 줄씩 출력해:\n{raw_joined}"
-                    translated = ask_ai(trans_prompt)
-                    trans_titles = [t.strip("-* ") for t in translated.split('\n') if t.strip()]
-                    
-                    for i, orig_title in enumerate(raw_titles):
-                        if i < len(trans_titles):
-                            news_text += f"- {trans_titles[i]}\n"
-                        else:
-                            news_text += f"- {orig_title}\n"
-        except Exception:
-            pass
-            
+        for t in news_titles:
+            clean_title = t.replace('&quot;', '"').replace('&amp;', '&')
+            news_text += f"- {clean_title}\n"
+        
         if not news_text.strip():
             news_text = "최신 주요 뉴스 없음"
 
-        # 5. AI 리포트 생성
+        # =====================================================================
+        # ★ 프롬프트 수정: 마크다운 기호(#, **)를 사용하지 않도록 AI에게 엄격히 지시
+        # =====================================================================
         prompt = f"""당신은 기관 투자자를 담당하는 수석 주식 애널리스트입니다.
 아래 데이터를 바탕으로 심층 분석 리포트를 작성하십시오.
 
 [데이터]
-종목: {korean_name} ({ticker})
+종목: {display_name} ({ticker})
 {stock_data}
-
-[최신 주요 뉴스]
+최신 주요 뉴스:
 {news_text}
 
-[출력 양식]
-📰 최신 이슈 및 단기 모멘텀: (작성)
-🏰 비즈니스 해자 및 펀더멘털: (작성)
-📊 밸류에이션 및 실적 진단: (작성)
-🌐 매크로 환경 및 섹터 전망: (작성)
-🎯 지지선 대응 및 투자 전략: (작성)"""
+[출력 양식 및 필수 규칙]
+1. 절대 마크다운 기호(*, **, #)를 사용하지 마세요. 
+2. 글머리 기호는 오직 이모지나 하이픈(-)만 사용하세요.
+3. 다음 4가지 항목을 포함하여 텍스트로만 깔끔하게 작성하세요:
+📰 최신 이슈 및 단기 모멘텀
+🏰 비즈니스 해자 및 펀더멘털
+📊 밸류에이션 및 실적 진단
+🎯 지지선 대응 및 투자 전략"""
         
         ai_analysis = ask_ai(prompt)
 
     except Exception as e:
-        korean_name = ticker
+        display_name = ticker
         stock_data = "데이터 수집 오류 발생"
         news_text = "뉴스 데이터 수집 실패"
         ai_analysis = f"오류 원인: {e}"
 
     # 최종 텔레그램 메시지 발송
-    final_message = f"⏰ [작성 일시: {current_time}]\n\n🔎 [{korean_name} ({ticker})] 핵심 지표\n{stock_data}\n\n🗞️ [최신 주요 뉴스]\n{news_text}\n\n🏛️ [기관 심층 분석 리포트]\n{ai_analysis}"
+    final_message = f"⏰ [작성 일시: {current_time}]\n\n🔎 [{display_name} ({ticker})] 핵심 지표\n{stock_data}\n\n🗞️ [최신 주요 뉴스]\n{news_text}\n\n🏛️ [기관 심층 분석 리포트]\n{ai_analysis}"
 
     if len(final_message) > 4000:
         final_message = final_message[:3900] + "\n\n(※ 내용 초과로 일부 요약됨)"
