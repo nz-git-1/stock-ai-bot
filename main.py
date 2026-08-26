@@ -60,45 +60,56 @@ def get_val(info, key, multiplier=1):
 
 for ticker in TICKERS:
     try:
-        # 야후 파이낸스에서 기본 데이터 수집 (지표용)
-        stock = yf.Ticker(ticker)
-        info = stock.info if stock.info else {}
-        
         is_korean = ticker.endswith(".KS") or ticker.endswith(".KQ")
         currency = "₩" if is_korean else "$"
         
-        display_name = info.get("shortName", ticker)
-        price = info.get("currentPrice", "N/A")
+        display_name = ticker
+        price = "N/A"
+        per = "N/A"
+        pbr = "N/A"
+        f_per = "N/A"
+        roe = "N/A"
+        debt = "N/A"
+        div = "N/A"
         
-        # GitHub Actions 차단 방지를 위한 범용 헤더
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
         news_titles = []
 
         # =====================================================================
-        # ★ 핵심 로직: 한국 주식은 야후의 쓰레기 데이터를 버리고 구글 파이낸스 직결
+        # ★ 안정성 100%: 네이버 금융 정적 HTML 파싱 (한국 주식 전용)
         # =====================================================================
         if is_korean:
             code = ticker.split('.')[0]
-            market = "KRX" if ticker.endswith(".KS") else "KOSDAQ"
+            nv_url = f"https://finance.naver.com/item/main.naver?code={code}"
             
             try:
-                # 구글 파이낸스 페이지 스크래핑 (차단율이 0에 가깝습니다)
-                gf_url = f"https://www.google.com/finance/quote/{code}:{market}"
-                gf_res = requests.get(gf_url, headers=headers, timeout=10)
+                nv_res = requests.get(nv_url, headers=headers, timeout=10)
+                html_text = nv_res.text
                 
-                # 1. 완벽한 한글 이름 추출 (예: 삼성전자)
-                name_match = re.search(r'<div class="zzDege">([^<]+)</div>', gf_res.text)
-                if name_match:
-                    display_name = name_match.group(1).strip()
+                # 한글 종목명 추출 (예: 삼성전자)
+                name_match = re.search(r'<title>(.*?)\s*:\s*네이버', html_text)
+                if name_match: display_name = name_match.group(1).strip()
                 
-                # 2. 야후의 비정상 주가(257,000)를 덮어쓰는 정확한 현재가 추출
-                price_match = re.search(r'<div class="YMlKvd dsqFNI">₩?([^<]+)</div>', gf_res.text)
-                if price_match:
-                    price = price_match.group(1).replace(',', '').strip()
+                # 정확한 현재가 추출
+                price_match = re.search(r'<dd>현재가\s+([0-9,]+)', html_text)
+                if price_match: price = price_match.group(1).replace(',', '')
+                
+                # PER 추출
+                per_match = re.search(r'id="_per">([0-9.]+)</em>', html_text)
+                if per_match: per = per_match.group(1)
+                
+                # PBR 추출
+                pbr_match = re.search(r'id="_pbr">([0-9.]+)</em>', html_text)
+                if pbr_match: pbr = pbr_match.group(1)
+                
+                # 배당수익률 추출
+                div_match = re.search(r'id="_dvr">([0-9.]+)</em>', html_text)
+                if div_match: div = div_match.group(1)
+                
             except Exception as e:
-                print(f"구글 파이낸스 데이터 수집 실패: {e}")
+                print(f"네이버 금융 파싱 실패: {e}")
 
-            # 3. 추출된 완벽한 한글 이름으로 구글 뉴스 검색
+            # 추출된 완벽한 한글 이름으로 구글 뉴스 검색
             news_query = urllib.parse.quote(display_name)
             news_url = f"https://news.google.com/rss/search?q={news_query}&hl=ko&gl=KR&ceid=KR:ko"
             
@@ -110,9 +121,21 @@ for ticker in TICKERS:
                 pass
                 
         # =====================================================================
-        # 미국 및 글로벌 주식 로직
+        # 미국 및 글로벌 주식 로직 (yfinance 유지)
         # =====================================================================
         else:
+            stock = yf.Ticker(ticker)
+            info = stock.info if stock.info else {}
+            
+            display_name = info.get("shortName", ticker)
+            price = info.get("currentPrice", "N/A")
+            per = get_val(info, "trailingPE")
+            f_per = get_val(info, "forwardPE")
+            pbr = get_val(info, "priceToBook")
+            roe = get_val(info, "returnOnEquity", 100)
+            debt = get_val(info, "debtToEquity")
+            div = get_val(info, "dividendYield", 100)
+            
             news_query = urllib.parse.quote(f"{ticker} stock")
             news_url = f"https://news.google.com/rss/search?q={news_query}&hl=en-US&gl=US&ceid=US:en"
             
@@ -123,35 +146,15 @@ for ticker in TICKERS:
                 
                 if raw_titles:
                     raw_text = "\n".join(raw_titles)
-                    trans_prompt = f"다음 미국 주식 영어 뉴스 제목들을 한국어로 자연스럽게 번역해줘. 번역된 텍스트만 한 줄씩 출력해:\n{raw_text}"
+                    trans_prompt = f"미국 주식 영어 뉴스 제목들을 한국어로 자연스럽게 번역해줘. 번역된 텍스트만 한 줄씩 출력해:\n{raw_text}"
                     translated = ask_ai(trans_prompt)
                     news_titles = [t.strip("-* ") for t in translated.split('\n') if t.strip()]
             except:
                 pass
 
-        # 지표 정리 (PER, PBR 수동 계산 병행)
-        eps = info.get("trailingEps")
-        per = info.get("trailingPE")
-        if per is None and price != "N/A" and eps and float(eps) > 0:
-            try: per = round(float(price) / float(eps), 2)
-            except: pass
-        per = per if per is not None else "N/A"
-
-        bv = info.get("bookValue")
-        pbr = info.get("priceToBook")
-        if pbr is None and price != "N/A" and bv and float(bv) > 0:
-            try: pbr = round(float(price) / float(bv), 2)
-            except: pass
-        pbr = pbr if pbr is not None else "N/A"
-        
-        f_per = get_val(info, "forwardPE")
-        roe = get_val(info, "returnOnEquity", 100)
-        debt = get_val(info, "debtToEquity")
-        div = get_val(info, "dividendYield", 100)
-
-        stock_data = f"현재가: {currency}{price}\nPER: {per} (내년 예상: {f_per})\nPBR: {pbr}\nROE: {roe}%\n부채비율: {debt}%\n배당수익률: {div}%"
-
         # 뉴스 텍스트 조립
+        stock_data = f"현재가: {currency}{price}\nPER: {per} (내년 예상: {f_per})\nPBR: {pbr}\nROE: {roe}%\n부채비율: {debt}%\n배당수익률: {div}%"
+        
         news_text = ""
         for t in news_titles:
             clean_title = t.replace('&quot;', '"').replace('&amp;', '&')
@@ -161,27 +164,29 @@ for ticker in TICKERS:
             news_text = "최신 주요 뉴스 없음"
 
         # =====================================================================
-        # ★ 프롬프트 수정: 마크다운 기호(#, **)를 사용하지 않도록 AI에게 엄격히 지시
+        # AI 리포트 생성 및 마크다운 완벽 제거
         # =====================================================================
-        prompt = f"""당신은 기관 투자자를 담당하는 수석 주식 애널리스트입니다.
-아래 데이터를 바탕으로 심층 분석 리포트를 작성하십시오.
+        prompt = f"""당신은 수석 주식 애널리스트입니다. 
+아래 데이터를 바탕으로 리포트를 작성하되, 마크다운 기호(*, **, #)를 절대 사용하지 마세요.
 
 [데이터]
-종목: {display_name} ({ticker})
+종목: {display_name}
 {stock_data}
 최신 주요 뉴스:
 {news_text}
 
-[출력 양식 및 필수 규칙]
-1. 절대 마크다운 기호(*, **, #)를 사용하지 마세요. 
-2. 글머리 기호는 오직 이모지나 하이픈(-)만 사용하세요.
-3. 다음 4가지 항목을 포함하여 텍스트로만 깔끔하게 작성하세요:
+[출력 양식]
+(이모지와 텍스트만 사용하여 아래 항목을 작성)
 📰 최신 이슈 및 단기 모멘텀
 🏰 비즈니스 해자 및 펀더멘털
 📊 밸류에이션 및 실적 진단
 🎯 지지선 대응 및 투자 전략"""
         
         ai_analysis = ask_ai(prompt)
+        
+        # 파이썬 코드 단에서 마크다운 기호 강제 삭제
+        if ai_analysis:
+            ai_analysis = ai_analysis.replace('*', '').replace('#', '')
 
     except Exception as e:
         display_name = ticker
