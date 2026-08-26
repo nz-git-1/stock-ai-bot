@@ -76,7 +76,7 @@ for ticker in TICKERS:
         news_titles = []
 
         # =====================================================================
-        # ★ 안정성 100%: 네이버 금융 정적 HTML 파싱 (한국 주식 전용)
+        # ★ 안정성 강화: 네이버 금융 파싱 (한국 주식 전용)
         # =====================================================================
         if is_korean:
             code = ticker.split('.')[0]
@@ -86,31 +86,35 @@ for ticker in TICKERS:
                 nv_res = requests.get(nv_url, headers=headers, timeout=10)
                 html_text = nv_res.text
                 
-                # 한글 종목명 추출 (예: 삼성전자)
+                # 한글 종목명 추출을 더 튼튼하게 변경
                 name_match = re.search(r'<title>(.*?)\s*:\s*네이버', html_text)
-                if name_match: display_name = name_match.group(1).strip()
+                if name_match: 
+                    display_name = name_match.group(1).strip()
+                else:
+                    # 타이틀 태그 실패 시 본문 h2 태그에서 추출 시도
+                    name_match_alt = re.search(r'<h2><a href="#" onclick="clickcr.*?>(.*?)</a></h2>', html_text)
+                    if name_match_alt:
+                        display_name = name_match_alt.group(1).strip()
                 
                 # 정확한 현재가 추출
                 price_match = re.search(r'<dd>현재가\s+([0-9,]+)', html_text)
                 if price_match: price = price_match.group(1).replace(',', '')
                 
-                # PER 추출
+                # 지표 추출
                 per_match = re.search(r'id="_per">([0-9.]+)</em>', html_text)
                 if per_match: per = per_match.group(1)
                 
-                # PBR 추출
                 pbr_match = re.search(r'id="_pbr">([0-9.]+)</em>', html_text)
                 if pbr_match: pbr = pbr_match.group(1)
                 
-                # 배당수익률 추출
                 div_match = re.search(r'id="_dvr">([0-9.]+)</em>', html_text)
                 if div_match: div = div_match.group(1)
                 
             except Exception as e:
                 print(f"네이버 금융 파싱 실패: {e}")
 
-            # 추출된 완벽한 한글 이름으로 구글 뉴스 검색
-            news_query = urllib.parse.quote(display_name)
+            # ★ 핵심 로직: 구글 뉴스 검색 시 'when:1d'를 추가하여 무조건 24시간 이내 최신 뉴스만 수집
+            news_query = urllib.parse.quote(f"{display_name} when:1d")
             news_url = f"https://news.google.com/rss/search?q={news_query}&hl=ko&gl=KR&ceid=KR:ko"
             
             try:
@@ -121,7 +125,7 @@ for ticker in TICKERS:
                 pass
                 
         # =====================================================================
-        # 미국 및 글로벌 주식 로직 (yfinance 유지)
+        # 미국 및 글로벌 주식 로직
         # =====================================================================
         else:
             stock = yf.Ticker(ticker)
@@ -136,7 +140,8 @@ for ticker in TICKERS:
             debt = get_val(info, "debtToEquity")
             div = get_val(info, "dividendYield", 100)
             
-            news_query = urllib.parse.quote(f"{ticker} stock")
+            # 글로벌 주식 뉴스 검색에도 'when:1d'를 추가하여 최신성 보장
+            news_query = urllib.parse.quote(f"{ticker} stock when:1d")
             news_url = f"https://news.google.com/rss/search?q={news_query}&hl=en-US&gl=US&ceid=US:en"
             
             try:
@@ -161,7 +166,7 @@ for ticker in TICKERS:
             news_text += f"- {clean_title}\n"
         
         if not news_text.strip():
-            news_text = "최신 주요 뉴스 없음"
+            news_text = "최근 24시간 이내 주요 뉴스 없음"
 
         # =====================================================================
         # AI 리포트 생성 및 마크다운 완벽 제거
@@ -184,7 +189,6 @@ for ticker in TICKERS:
         
         ai_analysis = ask_ai(prompt)
         
-        # 파이썬 코드 단에서 마크다운 기호 강제 삭제
         if ai_analysis:
             ai_analysis = ai_analysis.replace('*', '').replace('#', '')
 
