@@ -63,7 +63,41 @@ def get_val(info, key, multiplier=1):
 headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
 
 # =====================================================================
-# 2. 개별 종목 분석 및 발송 루프
+# 2. 글로벌 금융 시장 시황 선행 수집 및 분석 (봇 실행 시점)
+# =====================================================================
+global_ai_analysis = ""
+try:
+    global_news_query = urllib.parse.quote("글로벌 증시 OR 미국 증시 when:1d")
+    global_news_url = f"https://news.google.com/rss/search?q={global_news_query}&hl=ko&gl=KR&ceid=KR:ko"
+    
+    res = requests.get(global_news_url, headers=headers, timeout=10)
+    root = ET.fromstring(res.text)
+    global_raw_titles = [item.find('title').text for item in root.findall('.//channel/item')[:5]]
+    
+    global_news_text = ""
+    for t in global_raw_titles:
+        clean_title = t.replace('&quot;', '"').replace('&amp;', '&')
+        global_news_text += f"- {clean_title}\n"
+        
+    if not global_news_text.strip():
+        global_news_text = "최근 24시간 이내 글로벌 주요 뉴스 없음"
+
+    global_prompt = f"""당신은 수석 글로벌 거시경제 애널리스트입니다. 
+다음은 오늘 전 세계 금융 시장과 증시에 영향을 줄 수 있는 최신 뉴스 헤드라인입니다. 
+
+[글로벌 핵심 뉴스]
+{global_news_text}
+
+이 뉴스들이 글로벌 금융 시장 및 국내 증시에 미칠 의미를 심도 있게 분석하고, 오늘 시장에 임하는 투자자를 위한 조언과 코멘트를 작성해 주세요. 마크다운 기호(*, **, #)는 절대 사용하지 말고 텍스트와 이모지만 사용하세요."""
+    
+    global_ai_analysis = ask_ai(global_prompt)
+    if global_ai_analysis: 
+        global_ai_analysis = global_ai_analysis.replace('*', '').replace('#', '')
+except Exception as e:
+    global_ai_analysis = f"글로벌 시황 분석 중 오류 발생: {e}"
+
+# =====================================================================
+# 3. 개별 종목 데이터 수집, 리포트 생성 및 발송
 # =====================================================================
 for ticker in TICKERS:
     try:
@@ -73,26 +107,37 @@ for ticker in TICKERS:
         is_korean = ticker.endswith(".KS") or ticker.endswith(".KQ")
         currency = "₩" if is_korean else "$"
         
-        # 이름 정제
-        raw_name = info.get("shortName", ticker)
-        display_name = re.sub(r'\(.*?\)', '', raw_name).strip()
-
-        # 가격 데이터 추출 (5일치 차트 활용)
+        display_name = ticker
         price = "N/A"
         raw_price_num = None
-        try:
-            hist = stock.history(period="5d")
-            if not hist.empty:
-                raw_price_num = float(hist['Close'].iloc[-1])
-            else:
-                raw_price_num = info.get("currentPrice") or stock.fast_info.get("lastPrice")
-                
-            if raw_price_num:
-                price = f"{int(raw_price_num):,}" if is_korean else f"{float(raw_price_num):,.2f}"
-        except Exception:
-            pass
 
-        # 지표 추출
+        # ★ 야후 버그 해결: 한국 주식은 구글 파이낸스에서 이름과 가격 직접 스크래핑
+        if is_korean:
+            code = ticker.split('.')[0]
+            market = "KRX" if ticker.endswith(".KS") else "KOSDAQ"
+            gf_url = f"https://www.google.com/finance/quote/{code}:{market}?hl=ko"
+            
+            try:
+                gf_res = requests.get(gf_url, headers=headers, timeout=10)
+                # 한글 이름 추출
+                name_match = re.search(r'<title>([^<]+)\s+주가', gf_res.text)
+                if name_match: display_name = name_match.group(1).strip()
+                
+                # 정확한 가격 추출
+                price_match = re.search(r'data-last-price="([0-9.]+)"', gf_res.text)
+                if price_match:
+                    raw_price_num = float(price_match.group(1))
+                    price = f"{int(raw_price_num):,}"
+            except Exception:
+                pass
+        else:
+            # 미국/글로벌 주식은 yfinance 사용
+            display_name = info.get("shortName", ticker)
+            raw_price_num = info.get("currentPrice") or stock.fast_info.get("lastPrice")
+            if raw_price_num:
+                price = f"{float(raw_price_num):,.2f}"
+
+        # 지표 추출 및 계산 (PER, PBR)
         eps = info.get("trailingEps")
         per = info.get("trailingPE")
         if per is None and raw_price_num and eps and float(eps) > 0:
@@ -115,7 +160,7 @@ for ticker in TICKERS:
         if div != "N/A" and isinstance(div, (int, float)) and div > 20:
             div = "N/A (야후 데이터 오류)"
 
-        # 종목별 뉴스 수집
+        # 종목별 최신 뉴스 수집
         news_titles = []
         if is_korean:
             news_query = urllib.parse.quote(f"{display_name} when:1d")
@@ -176,7 +221,7 @@ for ticker in TICKERS:
         news_text = "뉴스 데이터 수집 실패"
         ai_analysis = f"오류 원인: {e}"
 
-    # 개별 종목 텔레그램 메시지 발송
+    # 개별 종목 메시지 전송
     final_message = f"⏰ [작성 일시: {current_time}]\n\n🔎 [{display_name} ({ticker})] 핵심 지표\n{stock_data}\n\n🗞️ [최신 주요 뉴스]\n{news_text}\n\n🏛️ [기관 심층 분석 리포트]\n{ai_analysis}"
     if len(final_message) > 4000: final_message = final_message[:3900] + "\n\n(※ 내용 초과로 일부 요약됨)"
 
@@ -185,40 +230,13 @@ for ticker in TICKERS:
     time.sleep(2)
 
 # =====================================================================
-# 3. 맨 마지막: 글로벌 금융 시장 시황 뉴스 검색 및 AI 조언 발송
+# 4. 맨 마지막: 글로벌 마감 시황 및 투자 조언 메시지 발송
 # =====================================================================
 try:
-    global_news_query = urllib.parse.quote("글로벌 금융 시장 증시 when:1d")
-    global_news_url = f"https://news.google.com/rss/search?q={global_news_query}&hl=ko&gl=KR&ceid=KR:ko"
-    
-    res = requests.get(global_news_url, headers=headers, timeout=10)
-    root = ET.fromstring(res.text)
-    global_raw_titles = [item.find('title').text for item in root.findall('.//channel/item')[:5]]
-    
-    global_news_text = ""
-    for t in global_raw_titles:
-        clean_title = t.replace('&quot;', '"').replace('&amp;', '&')
-        global_news_text += f"- {clean_title}\n"
-        
-    if not global_news_text.strip():
-        global_news_text = "최근 24시간 이내 글로벌 주요 뉴스 없음"
-
-    global_prompt = f"""당신은 수석 글로벌 거시경제 애널리스트입니다. 
-다음은 오늘 전 세계 금융 시장과 증시에 영향을 줄 수 있는 최신 뉴스 헤드라인입니다. 
-
-[글로벌 핵심 뉴스]
-{global_news_text}
-
-이 뉴스들이 글로벌 금융 시장 및 국내 증시에 미칠 의미를 심도 있게 분석하고, 오늘 시장에 임하는 투자자를 위한 조언과 코멘트를 작성해 주세요. 마크다운 기호(*, **, #)는 절대 사용하지 말고 텍스트와 이모지만 사용하세요."""
-    
-    global_ai_analysis = ask_ai(global_prompt)
-    if global_ai_analysis: global_ai_analysis = global_ai_analysis.replace('*', '').replace('#', '')
-    
-    # 글로벌 시황 텔레그램 메시지 발송
     global_message = f"🌍 [글로벌 마감 시황 및 투자 조언]\n\n{global_ai_analysis}"
+    if len(global_message) > 4000: global_message = global_message[:3900] + "\n\n(※ 내용 초과로 일부 요약됨)"
     
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     requests.post(url, data={"chat_id": CHAT_ID, "text": global_message})
-
 except Exception as e:
     print(f"글로벌 마감 시황 전송 중 오류 발생: {e}")
