@@ -17,11 +17,10 @@ TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
-# ★ 해결 포인트: tickers.txt 내 중복 종목을 자동으로 걸러냅니다.
 try:
     with open("tickers.txt", "r") as f:
         raw_tickers = [line.strip().upper() for line in f if line.strip()]
-        TICKERS = list(dict.fromkeys(raw_tickers)) # 중복 제거 및 순서 유지
+        TICKERS = list(dict.fromkeys(raw_tickers))
 except FileNotFoundError:
     TICKERS = ["005930.KS"]
 
@@ -254,7 +253,7 @@ def get_macro_data(symbol, multiply=1):
         return None, None, None
 
 usd_c, usd_d, usd_p = get_macro_data("USDKRW=X")
-jpy_c, jpy_d, jpy_p = get_macro_data("JPYKRW=X", 100) # 100엔 기준 곱하기 100
+jpy_c, jpy_d, jpy_p = get_macro_data("JPYKRW=X", 100)
 thb_c, thb_d, thb_p = get_macro_data("THBKRW=X")
 btc_c, btc_d, btc_p = get_macro_data("BTC-USD")
 gold_c, gold_d, gold_p = get_macro_data("GC=F")
