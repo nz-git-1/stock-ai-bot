@@ -4,7 +4,6 @@ import yfinance as yf
 import time
 import urllib.parse
 import xml.etree.ElementTree as ET
-import re
 from datetime import datetime, timezone, timedelta
 
 # =====================================================================
@@ -60,10 +59,10 @@ def get_val(info, key, multiplier=1):
     except:
         return "N/A"
 
-headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+headers = {'User-Agent': 'Mozilla/5.0 (Linux; Android 10; SM-G981B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/80.0.3987.162 Mobile Safari/537.36'}
 
 # =====================================================================
-# 2. 글로벌 금융 시장 시황 선행 수집 및 분석 (봇 실행 시점)
+# 2. 글로벌 금융 시장 시황 선행 수집 및 분석
 # =====================================================================
 global_ai_analysis = ""
 try:
@@ -101,66 +100,57 @@ except Exception as e:
 # =====================================================================
 for ticker in TICKERS:
     try:
-        stock = yf.Ticker(ticker)
-        info = stock.info if stock.info else {}
-        
         is_korean = ticker.endswith(".KS") or ticker.endswith(".KQ")
         currency = "₩" if is_korean else "$"
         
         display_name = ticker
         price = "N/A"
-        raw_price_num = None
+        per = "N/A"
+        f_per = "N/A"
+        pbr = "N/A"
+        roe = "N/A"
+        debt = "N/A"
+        div = "N/A"
 
-        # ★ 야후 버그 해결: 한국 주식은 구글 파이낸스에서 이름과 가격 직접 스크래핑
+        # ★ 차단 돌파 및 정확도 향상: 한국 주식은 네이버 모바일 API 데이터망 직접 연결
         if is_korean:
             code = ticker.split('.')[0]
-            market = "KRX" if ticker.endswith(".KS") else "KOSDAQ"
-            gf_url = f"https://www.google.com/finance/quote/{code}:{market}?hl=ko"
+            nv_url = f"https://m.stock.naver.com/api/stock/{code}/integration"
             
             try:
-                gf_res = requests.get(gf_url, headers=headers, timeout=10)
-                # 한글 이름 추출
-                name_match = re.search(r'<title>([^<]+)\s+주가', gf_res.text)
-                if name_match: display_name = name_match.group(1).strip()
+                nv_res = requests.get(nv_url, headers=headers, timeout=10)
+                if nv_res.status_code == 200:
+                    data = nv_res.json()
+                    display_name = data.get('stockName', ticker)
+                    price = data.get('closePrice', "N/A")
+                    per = data.get('per', "N/A")
+                    f_per = data.get('cnsPer', "N/A")
+                    pbr = data.get('pbr', "N/A")
+                    roe = data.get('roe', "N/A")
+                    div = data.get('dividendYield', "N/A")
+            except Exception as e:
+                print(f"네이버 API 수집 에러: {e}")
                 
-                # 정확한 가격 추출
-                price_match = re.search(r'data-last-price="([0-9.]+)"', gf_res.text)
-                if price_match:
-                    raw_price_num = float(price_match.group(1))
-                    price = f"{int(raw_price_num):,}"
-            except Exception:
-                pass
         else:
-            # 미국/글로벌 주식은 yfinance 사용
+            # 미국 및 글로벌 주식은 yfinance 사용
+            stock = yf.Ticker(ticker)
+            info = stock.info if stock.info else {}
+            
             display_name = info.get("shortName", ticker)
-            raw_price_num = info.get("currentPrice") or stock.fast_info.get("lastPrice")
-            if raw_price_num:
-                price = f"{float(raw_price_num):,.2f}"
+            raw_price = info.get("currentPrice") or stock.fast_info.get("lastPrice")
+            if raw_price:
+                price = f"{float(raw_price):,.2f}"
+                
+            per = get_val(info, "trailingPE")
+            f_per = get_val(info, "forwardPE")
+            pbr = get_val(info, "priceToBook")
+            roe = get_val(info, "returnOnEquity", 100)
+            debt = get_val(info, "debtToEquity")
+            div = get_val(info, "dividendYield", 100)
+            if div != "N/A" and isinstance(div, (int, float)) and div > 20:
+                div = "N/A (데이터 오류)"
 
-        # 지표 추출 및 계산 (PER, PBR)
-        eps = info.get("trailingEps")
-        per = info.get("trailingPE")
-        if per is None and raw_price_num and eps and float(eps) > 0:
-            try: per = round(float(raw_price_num) / float(eps), 2)
-            except: pass
-        per = get_val({"val": per}, "val") if per is not None else "N/A"
-
-        bv = info.get("bookValue")
-        pbr = info.get("priceToBook")
-        if pbr is None and raw_price_num and bv and float(bv) > 0:
-            try: pbr = round(float(raw_price_num) / float(bv), 2)
-            except: pass
-        pbr = get_val({"val": pbr}, "val") if pbr is not None else "N/A"
-        
-        f_per = get_val(info, "forwardPE")
-        roe = get_val(info, "returnOnEquity", 100)
-        debt = get_val(info, "debtToEquity")
-        
-        div = get_val(info, "dividendYield", 100)
-        if div != "N/A" and isinstance(div, (int, float)) and div > 20:
-            div = "N/A (야후 데이터 오류)"
-
-        # 종목별 최신 뉴스 수집
+        # 최신 종목 뉴스 수집 (24시간 이내 필터 유지)
         news_titles = []
         if is_korean:
             news_query = urllib.parse.quote(f"{display_name} when:1d")
@@ -179,7 +169,7 @@ for ticker in TICKERS:
             else:
                 if raw_titles:
                     raw_text = "\n".join(raw_titles)
-                    trans_prompt = f"다음 미국 주식 영어 뉴스 제목들을 한국어로 번역해줘. 텍스트만 한 줄씩 출력해:\n{raw_text}"
+                    trans_prompt = f"미국 주식 영어 뉴스 제목들을 한국어로 번역해줘. 텍스트만 한 줄씩 출력해:\n{raw_text}"
                     translated = ask_ai(trans_prompt)
                     news_titles = [t.strip("-* ") for t in translated.split('\n') if t.strip()]
         except:
@@ -210,7 +200,7 @@ for ticker in TICKERS:
 🏰 비즈니스 해자 및 펀더멘털
 📊 밸류에이션 및 실적 진단
 🎯 지지선 대응 및 투자 전략
-2. 가짜 뉴스를 지어내지 마세요."""
+2. 가짜 뉴스를 지어내지 마세요. 팩트에 기반하여 작성하세요."""
         
         ai_analysis = ask_ai(prompt)
         if ai_analysis: ai_analysis = ai_analysis.replace('*', '').replace('#', '')
