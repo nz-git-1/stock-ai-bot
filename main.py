@@ -4,6 +4,7 @@ import yfinance as yf
 import time
 import urllib.parse
 import xml.etree.ElementTree as ET
+import re
 from datetime import datetime, timezone, timedelta
 
 # =====================================================================
@@ -59,7 +60,7 @@ def get_val(info, key, multiplier=1):
     except:
         return "N/A"
 
-headers = {'User-Agent': 'Mozilla/5.0 (Linux; Android 10; SM-G981B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/80.0.3987.162 Mobile Safari/537.36'}
+headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
 
 # =====================================================================
 # 2. 글로벌 금융 시장 시황 선행 수집 및 분석
@@ -104,53 +105,69 @@ for ticker in TICKERS:
         currency = "₩" if is_korean else "$"
         
         display_name = ticker
-        price = "N/A"
-        per = "N/A"
-        f_per = "N/A"
-        pbr = "N/A"
-        roe = "N/A"
-        debt = "N/A"
-        div = "N/A"
+        price = per = f_per = pbr = roe = debt = div = "N/A"
+        raw_price_num = None
 
-        # ★ 차단 돌파 및 정확도 향상: 한국 주식은 네이버 모바일 API 데이터망 직접 연결
+        # ★ 차단 돌파용 3중 다중 수집 로직 (한국 주식 전용)
         if is_korean:
             code = ticker.split('.')[0]
-            nv_url = f"https://m.stock.naver.com/api/stock/{code}/integration"
+            data_found = False
             
+            # 1단계: 네이버 모바일 API 시도
             try:
-                nv_res = requests.get(nv_url, headers=headers, timeout=10)
+                nv_url = f"https://m.stock.naver.com/api/stock/{code}/integration"
+                nv_res = requests.get(nv_url, headers=headers, timeout=5)
                 if nv_res.status_code == 200:
                     data = nv_res.json()
                     display_name = data.get('stockName', ticker)
-                    price = data.get('closePrice', "N/A")
+                    price = f"{data.get('closePrice', 0):,}"
+                    raw_price_num = data.get('closePrice', 0)
                     per = data.get('per', "N/A")
-                    f_per = data.get('cnsPer', "N/A")
                     pbr = data.get('pbr', "N/A")
                     roe = data.get('roe', "N/A")
                     div = data.get('dividendYield', "N/A")
-            except Exception as e:
-                print(f"네이버 API 수집 에러: {e}")
-                
-        else:
-            # 미국 및 글로벌 주식은 yfinance 사용
+                    data_found = True
+            except:
+                pass
+
+            # 2단계: API 실패 시 웹 크롤링 시도
+            if not data_found:
+                try:
+                    html_url = f"https://finance.naver.com/item/main.naver?code={code}"
+                    html_res = requests.get(html_url, headers=headers, timeout=5)
+                    
+                    name_m = re.search(r'<title>(.*?)\s*:\s*네이버', html_res.text)
+                    if name_m: display_name = name_m.group(1).strip()
+                    
+                    price_m = re.search(r'<dd>현재가\s+([0-9,]+)', html_res.text)
+                    if price_m: 
+                        price = price_m.group(1)
+                        raw_price_num = float(price.replace(',', ''))
+                        data_found = True
+                except:
+                    pass
+
+        # 3단계: 미국 주식 처리 및 한국 주식 최종 백업 (yfinance)
+        if not is_korean or not raw_price_num:
             stock = yf.Ticker(ticker)
             info = stock.info if stock.info else {}
+            display_name = info.get("shortName", display_name)
             
-            display_name = info.get("shortName", ticker)
-            raw_price = info.get("currentPrice") or stock.fast_info.get("lastPrice")
-            if raw_price:
-                price = f"{float(raw_price):,.2f}"
+            raw_price_num = info.get("currentPrice") or stock.fast_info.get("lastPrice")
+            if raw_price_num:
+                price = f"{int(raw_price_num):,}" if is_korean else f"{float(raw_price_num):,.2f}"
                 
-            per = get_val(info, "trailingPE")
+            per = get_val(info, "trailingPE") if per == "N/A" else per
             f_per = get_val(info, "forwardPE")
-            pbr = get_val(info, "priceToBook")
-            roe = get_val(info, "returnOnEquity", 100)
+            pbr = get_val(info, "priceToBook") if pbr == "N/A" else pbr
+            roe = get_val(info, "returnOnEquity", 100) if roe == "N/A" else roe
             debt = get_val(info, "debtToEquity")
-            div = get_val(info, "dividendYield", 100)
-            if div != "N/A" and isinstance(div, (int, float)) and div > 20:
-                div = "N/A (데이터 오류)"
+            div = get_val(info, "dividendYield", 100) if div == "N/A" else div
+            
+        if div != "N/A" and isinstance(div, (int, float)) and div > 20:
+            div = "N/A (데이터 오류)"
 
-        # 최신 종목 뉴스 수집 (24시간 이내 필터 유지)
+        # 최신 종목 뉴스 수집
         news_titles = []
         if is_korean:
             news_query = urllib.parse.quote(f"{display_name} when:1d")
@@ -184,7 +201,6 @@ for ticker in TICKERS:
         if not news_text.strip():
             news_text = "최근 24시간 이내 주요 뉴스 없음"
 
-        # AI 개별 종목 리포트 생성
         prompt = f"""당신은 기관 투자자를 담당하는 수석 주식 애널리스트입니다.
 아래 데이터를 바탕으로 리포트를 작성하되, 마크다운 기호(*, **, #)를 절대 사용하지 마세요.
 
@@ -211,7 +227,6 @@ for ticker in TICKERS:
         news_text = "뉴스 데이터 수집 실패"
         ai_analysis = f"오류 원인: {e}"
 
-    # 개별 종목 메시지 전송
     final_message = f"⏰ [작성 일시: {current_time}]\n\n🔎 [{display_name} ({ticker})] 핵심 지표\n{stock_data}\n\n🗞️ [최신 주요 뉴스]\n{news_text}\n\n🏛️ [기관 심층 분석 리포트]\n{ai_analysis}"
     if len(final_message) > 4000: final_message = final_message[:3900] + "\n\n(※ 내용 초과로 일부 요약됨)"
 
@@ -220,10 +235,36 @@ for ticker in TICKERS:
     time.sleep(2)
 
 # =====================================================================
-# 4. 맨 마지막: 글로벌 마감 시황 및 투자 조언 메시지 발송
+# 4. 환율 및 주요 자산 데이터 수집 함수
+# =====================================================================
+def get_macro_price(symbol):
+    try:
+        t = yf.Ticker(symbol)
+        price = t.fast_info.get("lastPrice")
+        if not price:
+            price = t.history(period="1d")['Close'].iloc[-1]
+        return price
+    except:
+        return None
+
+usd_krw = get_macro_price("USDKRW=X")
+jpy_krw = get_macro_price("JPYKRW=X")
+thb_krw = get_macro_price("THBKRW=X")
+btc_usd = get_macro_price("BTC-USD")
+gold = get_macro_price("GC=F")
+
+macro_text = "\n\n📊 [주요 경제 지표]\n"
+macro_text += f"💵 달러/원: ₩{usd_krw:,.2f}\n" if usd_krw else "💵 달러/원: 정보 없음\n"
+macro_text += f"💴 엔/원(100엔): ₩{jpy_krw * 100:,.2f}\n" if jpy_krw else "💴 엔/원: 정보 없음\n"
+macro_text += f"🇹🇭 바트/원: ₩{thb_krw:,.2f}\n" if thb_krw else "🇹🇭 바트/원: 정보 없음\n"
+macro_text += f"🪙 비트코인: ${btc_usd:,.2f}\n" if btc_usd else "🪙 비트코인: 정보 없음\n"
+macro_text += f"🥇 금(온스당): ${gold:,.2f}\n" if gold else "🥇 금: 정보 없음\n"
+
+# =====================================================================
+# 5. 맨 마지막: 글로벌 마감 시황 및 투자 조언 메시지 발송
 # =====================================================================
 try:
-    global_message = f"🌍 [글로벌 마감 시황 및 투자 조언]\n\n{global_ai_analysis}"
+    global_message = f"🌍 [글로벌 마감 시황 및 투자 조언]\n\n{global_ai_analysis}{macro_text}"
     if len(global_message) > 4000: global_message = global_message[:3900] + "\n\n(※ 내용 초과로 일부 요약됨)"
     
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
