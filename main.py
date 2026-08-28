@@ -108,12 +108,10 @@ for ticker in TICKERS:
         price = per = f_per = pbr = roe = debt = div = "N/A"
         raw_price_num = None
 
-        # ★ 차단 돌파용 3중 다중 수집 로직 (한국 주식 전용)
         if is_korean:
             code = ticker.split('.')[0]
             data_found = False
             
-            # 1단계: 네이버 모바일 API 시도
             try:
                 nv_url = f"https://m.stock.naver.com/api/stock/{code}/integration"
                 nv_res = requests.get(nv_url, headers=headers, timeout=5)
@@ -130,7 +128,6 @@ for ticker in TICKERS:
             except:
                 pass
 
-            # 2단계: API 실패 시 웹 크롤링 시도
             if not data_found:
                 try:
                     html_url = f"https://finance.naver.com/item/main.naver?code={code}"
@@ -147,7 +144,6 @@ for ticker in TICKERS:
                 except:
                     pass
 
-        # 3단계: 미국 주식 처리 및 한국 주식 최종 백업 (yfinance)
         if not is_korean or not raw_price_num:
             stock = yf.Ticker(ticker)
             info = stock.info if stock.info else {}
@@ -167,7 +163,6 @@ for ticker in TICKERS:
         if div != "N/A" and isinstance(div, (int, float)) and div > 20:
             div = "N/A (데이터 오류)"
 
-        # 최신 종목 뉴스 수집
         news_titles = []
         if is_korean:
             news_query = urllib.parse.quote(f"{display_name} when:1d")
@@ -186,7 +181,8 @@ for ticker in TICKERS:
             else:
                 if raw_titles:
                     raw_text = "\n".join(raw_titles)
-                    trans_prompt = f"미국 주식 영어 뉴스 제목들을 한국어로 번역해줘. 텍스트만 한 줄씩 출력해:\n{raw_text}"
+                    # ★ 번역 프롬프트 초강력 통제
+                    trans_prompt = f"다음 영문 뉴스 기사 제목들을 오직 한국어로만 번역해서 출력해. 부연 설명, 영어 원문, 분석 과정은 절대 포함하지 말고, 번역된 한국어 문장만 한 줄에 하나씩 출력해:\n{raw_text}"
                     translated = ask_ai(trans_prompt)
                     news_titles = [t.strip("-* ") for t in translated.split('\n') if t.strip()]
         except:
@@ -235,30 +231,39 @@ for ticker in TICKERS:
     time.sleep(2)
 
 # =====================================================================
-# 4. 환율 및 주요 자산 데이터 수집 함수
+# 4. 환율 및 주요 자산 데이터 수집 (전일 대비 등락률 추가)
 # =====================================================================
-def get_macro_price(symbol):
+def get_macro_data(symbol, multiply=1):
     try:
         t = yf.Ticker(symbol)
-        price = t.fast_info.get("lastPrice")
-        if not price:
-            price = t.history(period="1d")['Close'].iloc[-1]
-        return price
+        hist = t.history(period="2d")
+        
+        if len(hist) >= 2:
+            prev_close = hist['Close'].iloc[-2] * multiply
+            current = hist['Close'].iloc[-1] * multiply
+        else:
+            current = t.fast_info.get("lastPrice", 0) * multiply
+            prev_close = t.fast_info.get("previousClose", current) * multiply
+            if current == 0: return None, None, None
+            
+        change = current - prev_close
+        change_pct = (change / prev_close) * 100 if prev_close > 0 else 0
+        return current, change, change_pct
     except:
-        return None
+        return None, None, None
 
-usd_krw = get_macro_price("USDKRW=X")
-jpy_krw = get_macro_price("JPYKRW=X")
-thb_krw = get_macro_price("THBKRW=X")
-btc_usd = get_macro_price("BTC-USD")
-gold = get_macro_price("GC=F")
+usd_c, usd_d, usd_p = get_macro_data("USDKRW=X")
+jpy_c, jpy_d, jpy_p = get_macro_data("JPYKRW=X", 100) # 100엔 기준 곱하기 100
+thb_c, thb_d, thb_p = get_macro_data("THBKRW=X")
+btc_c, btc_d, btc_p = get_macro_data("BTC-USD")
+gold_c, gold_d, gold_p = get_macro_data("GC=F")
 
 macro_text = "\n\n📊 [주요 경제 지표]\n"
-macro_text += f"💵 달러/원: ₩{usd_krw:,.2f}\n" if usd_krw else "💵 달러/원: 정보 없음\n"
-macro_text += f"💴 엔/원(100엔): ₩{jpy_krw * 100:,.2f}\n" if jpy_krw else "💴 엔/원: 정보 없음\n"
-macro_text += f"🇹🇭 바트/원: ₩{thb_krw:,.2f}\n" if thb_krw else "🇹🇭 바트/원: 정보 없음\n"
-macro_text += f"🪙 비트코인: ${btc_usd:,.2f}\n" if btc_usd else "🪙 비트코인: 정보 없음\n"
-macro_text += f"🥇 금(온스당): ${gold:,.2f}\n" if gold else "🥇 금: 정보 없음\n"
+macro_text += f"💵 달러/원: ₩{usd_c:,.2f} ({usd_d:+.2f} / {usd_p:+.2f}%)\n" if usd_c else "💵 달러/원: 정보 없음\n"
+macro_text += f"💴 엔/원(100엔): ₩{jpy_c:,.2f} ({jpy_d:+.2f} / {jpy_p:+.2f}%)\n" if jpy_c else "💴 엔/원: 정보 없음\n"
+macro_text += f"🇹🇭 바트/원: ₩{thb_c:,.2f} ({thb_d:+.2f} / {thb_p:+.2f}%)\n" if thb_c else "🇹🇭 바트/원: 정보 없음\n"
+macro_text += f"🪙 비트코인: ${btc_c:,.2f} ({btc_d:+.2f} / {btc_p:+.2f}%)\n" if btc_c else "🪙 비트코인: 정보 없음\n"
+macro_text += f"🥇 금(온스당): ${gold_c:,.2f} ({gold_d:+.2f} / {gold_p:+.2f}%)\n" if gold_c else "🥇 금: 정보 없음\n"
 
 # =====================================================================
 # 5. 맨 마지막: 글로벌 마감 시황 및 투자 조언 메시지 발송
