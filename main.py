@@ -17,9 +17,11 @@ TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
+# ★ 해결 포인트: tickers.txt 내 중복 종목을 자동으로 걸러냅니다.
 try:
     with open("tickers.txt", "r") as f:
-        TICKERS = [line.strip().upper() for line in f if line.strip()]
+        raw_tickers = [line.strip().upper() for line in f if line.strip()]
+        TICKERS = list(dict.fromkeys(raw_tickers)) # 중복 제거 및 순서 유지
 except FileNotFoundError:
     TICKERS = ["005930.KS"]
 
@@ -181,7 +183,6 @@ for ticker in TICKERS:
             else:
                 if raw_titles:
                     raw_text = "\n".join(raw_titles)
-                    # ★ 번역 프롬프트 초강력 통제
                     trans_prompt = f"다음 영문 뉴스 기사 제목들을 오직 한국어로만 번역해서 출력해. 부연 설명, 영어 원문, 분석 과정은 절대 포함하지 말고, 번역된 한국어 문장만 한 줄에 하나씩 출력해:\n{raw_text}"
                     translated = ask_ai(trans_prompt)
                     news_titles = [t.strip("-* ") for t in translated.split('\n') if t.strip()]
