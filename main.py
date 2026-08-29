@@ -5,6 +5,7 @@ import time
 import urllib.parse
 import xml.etree.ElementTree as ET
 import re
+import json
 from datetime import datetime, timezone, timedelta
 
 # =====================================================================
@@ -109,61 +110,74 @@ for ticker in TICKERS:
         price = per = f_per = pbr = roe = debt = div = "N/A"
         raw_price_num = None
 
+        # ★ 1차: yfinance 기본 데이터 수집 (글로벌 범용)
+        stock = yf.Ticker(ticker)
+        info = stock.info if stock.info else {}
+        
+        if not is_korean:
+            display_name = info.get("shortName", ticker)
+            raw_price_num = info.get("currentPrice") or stock.fast_info.get("lastPrice")
+            if raw_price_num: price = f"{float(raw_price_num):,.2f}"
+            
+            per = get_val(info, "trailingPE")
+            f_per = get_val(info, "forwardPE")
+            pbr = get_val(info, "priceToBook")
+            roe = get_val(info, "returnOnEquity", 100)
+            debt = get_val(info, "debtToEquity")
+            div = get_val(info, "dividendYield", 100)
+
+        # ★ 2차: 강제 웹 스크래핑 보완 (yfinance가 누락한 지표 및 한국 주식 데이터 채우기)
         if is_korean:
             code = ticker.split('.')[0]
-            data_found = False
-            
+            nv_url = f"https://finance.naver.com/item/main.naver?code={code}"
             try:
-                nv_url = f"https://m.stock.naver.com/api/stock/{code}/integration"
-                nv_res = requests.get(nv_url, headers=headers, timeout=5)
-                if nv_res.status_code == 200:
-                    data = nv_res.json()
-                    display_name = data.get('stockName', ticker)
-                    price = f"{data.get('closePrice', 0):,}"
-                    raw_price_num = data.get('closePrice', 0)
-                    per = data.get('per', "N/A")
-                    pbr = data.get('pbr', "N/A")
-                    roe = data.get('roe', "N/A")
-                    div = data.get('dividendYield', "N/A")
-                    data_found = True
+                html_res = requests.get(nv_url, headers=headers, timeout=5)
+                html_text = html_res.text
+                
+                name_m = re.search(r'<title>(.*?)\s*:\s*네이버', html_text)
+                if name_m: display_name = name_m.group(1).strip()
+                
+                price_m = re.search(r'<dd>현재가\s+([0-9,]+)', html_text)
+                if price_m: 
+                    price = price_m.group(1)
+                    raw_price_num = float(price.replace(',', ''))
+                    
+                per_m = re.search(r'id="_per">([0-9,.]+)', html_text)
+                if per_m: per = per_m.group(1)
+                
+                pbr_m = re.search(r'id="_pbr">([0-9,.]+)', html_text)
+                if pbr_m: pbr = pbr_m.group(1)
+                
+                roe_m = re.search(r'id="_roe">([0-9,.]+)', html_text)
+                if roe_m: roe = roe_m.group(1)
+                
+                div_m = re.search(r'id="_dvr">([0-9,.]+)', html_text)
+                if div_m: div = div_m.group(1)
             except:
                 pass
-
-            if not data_found:
+        else:
+            # 미국 주식 지표가 N/A일 경우 야후 파이낸스 직접 스크래핑 보완
+            if per == "N/A" or pbr == "N/A":
                 try:
-                    html_url = f"https://finance.naver.com/item/main.naver?code={code}"
-                    html_res = requests.get(html_url, headers=headers, timeout=5)
+                    yh_url = f"https://finance.yahoo.com/quote/{ticker}"
+                    yh_res = requests.get(yh_url, headers=headers, timeout=5)
+                    yh_text = yh_res.text
                     
-                    name_m = re.search(r'<title>(.*?)\s*:\s*네이버', html_res.text)
-                    if name_m: display_name = name_m.group(1).strip()
+                    pe_m = re.search(r'"trailingPE"(?:.*?)"raw":([0-9.]+)', yh_text)
+                    if pe_m and per == "N/A": per = round(float(pe_m.group(1)), 2)
                     
-                    price_m = re.search(r'<dd>현재가\s+([0-9,]+)', html_res.text)
-                    if price_m: 
-                        price = price_m.group(1)
-                        raw_price_num = float(price.replace(',', ''))
-                        data_found = True
+                    pb_m = re.search(r'"priceToBook"(?:.*?)"raw":([0-9.]+)', yh_text)
+                    if pb_m and pbr == "N/A": pbr = round(float(pb_m.group(1)), 2)
+                    
+                    roe_m = re.search(r'"returnOnEquity"(?:.*?)"raw":([0-9.]+)', yh_text)
+                    if roe_m and roe == "N/A": roe = round(float(roe_m.group(1)) * 100, 2)
                 except:
                     pass
 
-        if not is_korean or not raw_price_num:
-            stock = yf.Ticker(ticker)
-            info = stock.info if stock.info else {}
-            display_name = info.get("shortName", display_name)
-            
-            raw_price_num = info.get("currentPrice") or stock.fast_info.get("lastPrice")
-            if raw_price_num:
-                price = f"{int(raw_price_num):,}" if is_korean else f"{float(raw_price_num):,.2f}"
-                
-            per = get_val(info, "trailingPE") if per == "N/A" else per
-            f_per = get_val(info, "forwardPE")
-            pbr = get_val(info, "priceToBook") if pbr == "N/A" else pbr
-            roe = get_val(info, "returnOnEquity", 100) if roe == "N/A" else roe
-            debt = get_val(info, "debtToEquity")
-            div = get_val(info, "dividendYield", 100) if div == "N/A" else div
-            
         if div != "N/A" and isinstance(div, (int, float)) and div > 20:
             div = "N/A (데이터 오류)"
 
+        # 최신 종목 뉴스 수집
         news_titles = []
         if is_korean:
             news_query = urllib.parse.quote(f"{display_name} when:1d")
@@ -182,9 +196,21 @@ for ticker in TICKERS:
             else:
                 if raw_titles:
                     raw_text = "\n".join(raw_titles)
-                    trans_prompt = f"다음 영문 뉴스 기사 제목들을 오직 한국어로만 번역해서 출력해. 부연 설명, 영어 원문, 분석 과정은 절대 포함하지 말고, 번역된 한국어 문장만 한 줄에 하나씩 출력해:\n{raw_text}"
+                    # ★ 완벽한 번역 통제: JSON 배열 출력 강제
+                    trans_prompt = f"""다음 영문 기사 제목들을 한국어로 번역하여 오직 JSON 배열 형태로만 출력하세요. 
+어떠한 부연 설명이나 영어 원문도 포함해서는 안 됩니다.
+예시: ["번역된 제목 1", "번역된 제목 2"]
+
+원본:
+{raw_text}"""
                     translated = ask_ai(trans_prompt)
-                    news_titles = [t.strip("-* ") for t in translated.split('\n') if t.strip()]
+                    try:
+                        # 마크다운 코드 블록(```json 등)이 섞여 있을 경우 정제
+                        cleaned_json = translated.replace('```json', '').replace('```', '').strip()
+                        news_titles = json.loads(cleaned_json)
+                    except:
+                        # 최후의 안전장치: JSON 파싱 실패 시 수동 정제
+                        news_titles = [t.strip('"-*[], ') for t in translated.split('\n') if t.strip() and not t.lower().startswith(('input', 'constraint', 'headline', 'draft', 'meaning', 'output', '예시'))]
         except:
             pass
 
@@ -226,7 +252,7 @@ for ticker in TICKERS:
     final_message = f"⏰ [작성 일시: {current_time}]\n\n🔎 [{display_name} ({ticker})] 핵심 지표\n{stock_data}\n\n🗞️ [최신 주요 뉴스]\n{news_text}\n\n🏛️ [기관 심층 분석 리포트]\n{ai_analysis}"
     if len(final_message) > 4000: final_message = final_message[:3900] + "\n\n(※ 내용 초과로 일부 요약됨)"
 
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    url = f"[https://api.telegram.org/bot](https://api.telegram.org/bot){TELEGRAM_TOKEN}/sendMessage"
     requests.post(url, data={"chat_id": CHAT_ID, "text": final_message})
     time.sleep(2)
 
@@ -272,7 +298,7 @@ try:
     global_message = f"🌍 [글로벌 마감 시황 및 투자 조언]\n\n{global_ai_analysis}{macro_text}"
     if len(global_message) > 4000: global_message = global_message[:3900] + "\n\n(※ 내용 초과로 일부 요약됨)"
     
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    url = f"[https://api.telegram.org/bot](https://api.telegram.org/bot){TELEGRAM_TOKEN}/sendMessage"
     requests.post(url, data={"chat_id": CHAT_ID, "text": global_message})
 except Exception as e:
     print(f"글로벌 마감 시황 전송 중 오류 발생: {e}")
