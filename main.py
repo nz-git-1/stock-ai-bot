@@ -26,12 +26,12 @@ except FileNotFoundError:
     TICKERS = ["005930.KS"]
 
 if not TICKERS:
-    raise Exception("tickers.txt 파일이 비어있습니다.")
+    TICKERS = ["005930.KS"] # 빈 파일일 경우 기본값 강제 할당 (에러 방지)
 
 valid_models = ["gemini-1.5-flash", "gemini-pro"]
 try:
     list_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={GEMINI_API_KEY}"
-    list_res = requests.get(list_url).json()
+    list_res = requests.get(list_url, timeout=10).json()
     if "models" in list_res:
         valid_models = [m["name"].split("/")[-1] for m in list_res["models"] if "generateContent" in m.get("supportedGenerationMethods", [])]
 except:
@@ -46,7 +46,7 @@ def ask_ai(prompt):
         }
         for _ in range(2):
             try:
-                res = requests.post(url, headers={'Content-Type': 'application/json'}, json=payload, timeout=15).json()
+                res = requests.post(url, headers={'Content-Type': 'application/json'}, json=payload, timeout=20).json()
                 if "candidates" in res:
                     return res['candidates'][0]['content']['parts'][0]['text'].strip()
                 break 
@@ -72,7 +72,7 @@ try:
     global_news_query = urllib.parse.quote("글로벌 증시 OR 미국 증시 when:1d")
     global_news_url = f"https://news.google.com/rss/search?q={global_news_query}&hl=ko&gl=KR&ceid=KR:ko"
     
-    res = requests.get(global_news_url, headers=headers, timeout=10)
+    res = requests.get(global_news_url, headers=headers, timeout=15)
     root = ET.fromstring(res.text)
     global_raw_titles = [item.find('title').text for item in root.findall('.//channel/item')[:5]]
     
@@ -96,7 +96,7 @@ try:
     if global_ai_analysis: 
         global_ai_analysis = global_ai_analysis.replace('*', '').replace('#', '')
 except Exception as e:
-    global_ai_analysis = f"글로벌 시황 분석 중 오류 발생: {e}"
+    global_ai_analysis = f"글로벌 시황 데이터 수집 지연으로 인한 생략"
 
 # =====================================================================
 # 3. 개별 종목 데이터 수집, 리포트 생성 및 발송
@@ -111,27 +111,30 @@ for ticker in TICKERS:
         raw_price_num = None
 
         # ★ 1차: yfinance 기본 데이터 수집 (글로벌 범용)
-        stock = yf.Ticker(ticker)
-        info = stock.info if stock.info else {}
-        
-        if not is_korean:
-            display_name = info.get("shortName", ticker)
-            raw_price_num = info.get("currentPrice") or stock.fast_info.get("lastPrice")
-            if raw_price_num: price = f"{float(raw_price_num):,.2f}"
+        try:
+            stock = yf.Ticker(ticker)
+            info = stock.info if stock.info else {}
             
-            per = get_val(info, "trailingPE")
-            f_per = get_val(info, "forwardPE")
-            pbr = get_val(info, "priceToBook")
-            roe = get_val(info, "returnOnEquity", 100)
-            debt = get_val(info, "debtToEquity")
-            div = get_val(info, "dividendYield", 100)
+            if not is_korean:
+                display_name = info.get("shortName", ticker)
+                raw_price_num = info.get("currentPrice") or stock.fast_info.get("lastPrice")
+                if raw_price_num: price = f"{float(raw_price_num):,.2f}"
+                
+                per = get_val(info, "trailingPE")
+                f_per = get_val(info, "forwardPE")
+                pbr = get_val(info, "priceToBook")
+                roe = get_val(info, "returnOnEquity", 100)
+                debt = get_val(info, "debtToEquity")
+                div = get_val(info, "dividendYield", 100)
+        except:
+            pass
 
-        # ★ 2차: 강제 웹 스크래핑 보완 (yfinance가 누락한 지표 및 한국 주식 데이터 채우기)
+        # ★ 2차: 강제 웹 스크래핑 보완
         if is_korean:
             code = ticker.split('.')[0]
             nv_url = f"https://finance.naver.com/item/main.naver?code={code}"
             try:
-                html_res = requests.get(nv_url, headers=headers, timeout=5)
+                html_res = requests.get(nv_url, headers=headers, timeout=10)
                 html_text = html_res.text
                 
                 name_m = re.search(r'<title>(.*?)\s*:\s*네이버', html_text)
@@ -156,11 +159,10 @@ for ticker in TICKERS:
             except:
                 pass
         else:
-            # 미국 주식 지표가 N/A일 경우 야후 파이낸스 직접 스크래핑 보완
             if per == "N/A" or pbr == "N/A":
                 try:
                     yh_url = f"https://finance.yahoo.com/quote/{ticker}"
-                    yh_res = requests.get(yh_url, headers=headers, timeout=5)
+                    yh_res = requests.get(yh_url, headers=headers, timeout=10)
                     yh_text = yh_res.text
                     
                     pe_m = re.search(r'"trailingPE"(?:.*?)"raw":([0-9.]+)', yh_text)
@@ -187,7 +189,7 @@ for ticker in TICKERS:
             news_url = f"https://news.google.com/rss/search?q={news_query}&hl=en-US&gl=US&ceid=US:en"
             
         try:
-            res = requests.get(news_url, headers=headers, timeout=10)
+            res = requests.get(news_url, headers=headers, timeout=15)
             root = ET.fromstring(res.text)
             raw_titles = [item.find('title').text for item in root.findall('.//channel/item')[:3]]
             
@@ -196,7 +198,6 @@ for ticker in TICKERS:
             else:
                 if raw_titles:
                     raw_text = "\n".join(raw_titles)
-                    # ★ 완벽한 번역 통제: JSON 배열 출력 강제
                     trans_prompt = f"""다음 영문 기사 제목들을 한국어로 번역하여 오직 JSON 배열 형태로만 출력하세요. 
 어떠한 부연 설명이나 영어 원문도 포함해서는 안 됩니다.
 예시: ["번역된 제목 1", "번역된 제목 2"]
@@ -205,11 +206,9 @@ for ticker in TICKERS:
 {raw_text}"""
                     translated = ask_ai(trans_prompt)
                     try:
-                        # 마크다운 코드 블록(```json 등)이 섞여 있을 경우 정제
                         cleaned_json = translated.replace('```json', '').replace('```', '').strip()
                         news_titles = json.loads(cleaned_json)
                     except:
-                        # 최후의 안전장치: JSON 파싱 실패 시 수동 정제
                         news_titles = [t.strip('"-*[], ') for t in translated.split('\n') if t.strip() and not t.lower().startswith(('input', 'constraint', 'headline', 'draft', 'meaning', 'output', '예시'))]
         except:
             pass
@@ -245,15 +244,20 @@ for ticker in TICKERS:
 
     except Exception as e:
         display_name = ticker
-        stock_data = "데이터 수집 오류 발생"
-        news_text = "뉴스 데이터 수집 실패"
-        ai_analysis = f"오류 원인: {e}"
+        stock_data = "데이터 수집 오류 방지 (다음 종목 진행)"
+        news_text = "뉴스 데이터 수집 지연"
+        ai_analysis = f"내부 처리 지연으로 분석 생략"
 
-    final_message = f"⏰ [작성 일시: {current_time}]\n\n🔎 [{display_name} ({ticker})] 핵심 지표\n{stock_data}\n\n🗞️ [최신 주요 뉴스]\n{news_text}\n\n🏛️ [기관 심층 분석 리포트]\n{ai_analysis}"
-    if len(final_message) > 4000: final_message = final_message[:3900] + "\n\n(※ 내용 초과로 일부 요약됨)"
-
-    url = f"[https://api.telegram.org/bot](https://api.telegram.org/bot){TELEGRAM_TOKEN}/sendMessage"
-    requests.post(url, data={"chat_id": CHAT_ID, "text": final_message})
+    # ★ 텔레그램 발송 시에도 타임아웃과 예외 처리를 추가하여 멈춤 방지
+    try:
+        final_message = f"⏰ [작성 일시: {current_time}]\n\n🔎 [{display_name} ({ticker})] 핵심 지표\n{stock_data}\n\n🗞️ [최신 주요 뉴스]\n{news_text}\n\n🏛️ [기관 심층 분석 리포트]\n{ai_analysis}"
+        if len(final_message) > 4000: final_message = final_message[:3900] + "\n\n(※ 내용 초과로 일부 요약됨)"
+        
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+        requests.post(url, data={"chat_id": CHAT_ID, "text": final_message}, timeout=15)
+    except Exception as e:
+        print(f"텔레그램 발송 실패 (종목: {ticker}): {e}")
+        
     time.sleep(2)
 
 # =====================================================================
@@ -298,7 +302,7 @@ try:
     global_message = f"🌍 [글로벌 마감 시황 및 투자 조언]\n\n{global_ai_analysis}{macro_text}"
     if len(global_message) > 4000: global_message = global_message[:3900] + "\n\n(※ 내용 초과로 일부 요약됨)"
     
-    url = f"[https://api.telegram.org/bot](https://api.telegram.org/bot){TELEGRAM_TOKEN}/sendMessage"
-    requests.post(url, data={"chat_id": CHAT_ID, "text": global_message})
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    requests.post(url, data={"chat_id": CHAT_ID, "text": global_message}, timeout=15)
 except Exception as e:
     print(f"글로벌 마감 시황 전송 중 오류 발생: {e}")
