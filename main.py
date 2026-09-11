@@ -65,7 +65,7 @@ def get_val(info, key, multiplier=1):
 headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
 
 # =====================================================================
-# 2. 글로벌 금융 시장 시황 선행 수집 및 분석
+# 2. 글로벌 금융 시장 시황 선행 수집 및 분석 (경제 일정 포함)
 # =====================================================================
 global_ai_analysis = ""
 try:
@@ -84,13 +84,17 @@ try:
     if not global_news_text.strip():
         global_news_text = "최근 글로벌 주요 뉴스 없음"
 
+    # ★ 프롬프트 업데이트: 경제 지표 발표 일정 추가 요청
     global_prompt = f"""당신은 수석 글로벌 거시경제 애널리스트입니다. 
-다음은 최근 전 세계 금융 시장과 증시에 영향을 줄 수 있는 핵심 뉴스 헤드라인입니다. 
+아래의 최근 글로벌 핵심 뉴스와 당신의 지식을 바탕으로 다음 2가지를 작성해 주세요.
 
 [글로벌 핵심 뉴스]
 {global_news_text}
 
-이 뉴스들이 글로벌 금융 시장 및 국내 증시에 미칠 의미를 심도 있게 분석하고, 시장에 임하는 투자자를 위한 조언을 작성해 주세요. 마크다운 기호(*, **, #)는 절대 사용하지 말고 텍스트와 이모지만 사용하세요."""
+[요청 사항]
+1. 위 뉴스가 글로벌 금융 시장 및 국내 증시에 미칠 의미를 분석하고 투자 조언을 작성하세요.
+2. 오늘 혹은 이번 주 내에 예정된 **한국 및 미국의 주요 경제 지표 발표 일정(예: CPI, PPI, 수출입동향, 금리 결정 등)**을 리포트 하단에 요약해서 반드시 포함해 주세요.
+* 주의: 마크다운 기호(*, **, #)는 절대 사용하지 말고 텍스트와 이모지만 사용하세요."""
     
     global_ai_analysis = ask_ai(global_prompt)
     if global_ai_analysis: 
@@ -110,12 +114,10 @@ for ticker in TICKERS:
         price = per = f_per = pbr = roe = debt = div = "N/A"
         raw_price_num = None
 
-        # 1차: 안정적인 yfinance history 및 info 활용
         try:
             stock = yf.Ticker(ticker)
             info = stock.info if stock.info else {}
             
-            # 한글/영문 이름 처리
             if is_korean:
                 code = ticker.split('.')[0]
                 try:
@@ -128,7 +130,6 @@ for ticker in TICKERS:
             else:
                 display_name = info.get("shortName", ticker)
 
-            # 강력한 가격 추출 (5일치 데이터 중 최근 종가 활용)
             hist = stock.history(period="5d")
             if not hist.empty:
                 raw_price_num = float(hist['Close'].iloc[-1])
@@ -138,7 +139,6 @@ for ticker in TICKERS:
             if raw_price_num:
                 price = f"{int(raw_price_num):,}" if is_korean else f"{float(raw_price_num):,.2f}"
             
-            # 지표 추출
             per = get_val(info, "trailingPE")
             f_per = get_val(info, "forwardPE")
             pbr = get_val(info, "priceToBook")
@@ -151,7 +151,6 @@ for ticker in TICKERS:
         if div != "N/A" and isinstance(div, (int, float)) and div > 20:
             div = "N/A (데이터 오류)"
 
-        # 최신 종목 뉴스 수집
         news_titles = []
         if is_korean:
             news_query = urllib.parse.quote(f"{display_name}")
@@ -173,7 +172,6 @@ for ticker in TICKERS:
                     trans_prompt = f"다음 영어 기사 제목들을 번역해 줘. 부연 설명이나 원래 영어 문장은 절대 쓰지 말고, 번역된 한국어 문장만 정확히 한 줄에 하나씩 출력해.\n\n제목들:\n{raw_joined}"
                     translated = ask_ai(trans_prompt)
                     
-                    # 파이썬 자체 강력 필터링
                     for line in translated.split('\n'):
                         clean_line = re.sub(r'^(?:\d+\.|\-|\*|headline\s*\d*:?|draft.*?|translation.*?|refined.*?|output.*?|input.*?|task.*?)\s*', '', line, flags=re.IGNORECASE).strip('"-*[], ')
                         if not clean_line: continue
@@ -231,7 +229,7 @@ for ticker in TICKERS:
     time.sleep(2)
 
 # =====================================================================
-# 4. 환율 및 주요 자산 데이터 수집 (새로운 지표 통합)
+# 4. 환율 및 주요 자산 데이터 수집 (한국 금리 스크래핑 추가)
 # =====================================================================
 def get_macro_data(symbol, multiply=1):
     try:
@@ -252,6 +250,22 @@ def get_macro_data(symbol, multiply=1):
     except:
         return None, None, None
 
+def get_kr_10y_bond():
+    # 야후 파이낸스 지원이 부족한 한국 10년물 국채 금리 네이버 직접 스크래핑
+    try:
+        url = "https://finance.naver.com/marketindex/interestDailyQuote.naver?marketindexCd=IRR_GOVT10Y"
+        res = requests.get(url, headers=headers, timeout=10)
+        match = re.findall(r'<td class="num">([0-9.]+)</td>', res.text)
+        if len(match) >= 4:
+            current = float(match[0])
+            prev = float(match[3])
+            change = current - prev
+            change_pct = (change / prev) * 100 if prev > 0 else 0
+            return current, change, change_pct
+    except:
+        pass
+    return None, None, None
+
 def get_fear_and_greed():
     try:
         fg_url = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
@@ -261,7 +275,6 @@ def get_fear_and_greed():
             score = round(data['fear_and_greed']['score'])
             rating = data['fear_and_greed']['rating'].lower()
             
-            # 한국어 상태 변환
             rating_map = {
                 "extreme fear": "극단적 공포",
                 "fear": "공포",
@@ -275,12 +288,19 @@ def get_fear_and_greed():
         pass
     return None, None
 
-# 지표 수집
+# 증시 지수
+snp_c, snp_d, snp_p = get_macro_data("^GSPC")
+nasdaq_c, nasdaq_d, nasdaq_p = get_macro_data("^IXIC")
 kospi_c, kospi_d, kospi_p = get_macro_data("^KS11")
 kosdaq_c, kosdaq_d, kosdaq_p = get_macro_data("^KQ11")
+
+# 금리
+us10y_c, us10y_d, us10y_p = get_macro_data("^TNX")
+kr10y_c, kr10y_d, kr10y_p = get_kr_10y_bond()
+
+# 환율 및 원자재, 변동성
 usd_c, usd_d, usd_p = get_macro_data("USDKRW=X")
 jpy_c, jpy_d, jpy_p = get_macro_data("JPYKRW=X", 100)
-thb_c, thb_d, thb_p = get_macro_data("THBKRW=X")
 btc_c, btc_d, btc_p = get_macro_data("BTC-USD")
 gold_c, gold_d, gold_p = get_macro_data("GC=F")
 wti_c, wti_d, wti_p = get_macro_data("CL=F")
@@ -288,26 +308,45 @@ vkospi_c, vkospi_d, vkospi_p = get_macro_data("^VKOSPI")
 vix_c, vix_d, vix_p = get_macro_data("^VIX")
 fg_score, fg_rating = get_fear_and_greed()
 
-macro_text = "\n\n📊 [주요 경제 지표]\n"
+macro_text = ""
+macro_text += "📈 [글로벌 및 국내 증시 지수]\n"
+macro_text += f"🇺🇸 S&P 500: {snp_c:,.2f} ({snp_d:+.2f} / {snp_p:+.2f}%)\n" if snp_c else "🇺🇸 S&P 500: 정보 없음\n"
+macro_text += f"🇺🇸 나스닥: {nasdaq_c:,.2f} ({nasdaq_d:+.2f} / {nasdaq_p:+.2f}%)\n" if nasdaq_c else "🇺🇸 나스닥: 정보 없음\n"
 macro_text += f"🇰🇷 코스피: {kospi_c:,.2f} ({kospi_d:+.2f} / {kospi_p:+.2f}%)\n" if kospi_c else "🇰🇷 코스피: 정보 없음\n"
-macro_text += f"🇰🇷 코스닥: {kosdaq_c:,.2f} ({kosdaq_d:+.2f} / {kosdaq_p:+.2f}%)\n" if kosdaq_c else "🇰🇷 코스닥: 정보 없음\n"
-macro_text += f"💵 달러/원: ₩{usd_c:,.2f} ({usd_d:+.2f} / {usd_p:+.2f}%)\n" if usd_c else "💵 달러/원: 정보 없음\n"
-macro_text += f"💴 엔/원(100엔): ₩{jpy_c:,.2f} ({jpy_d:+.2f} / {jpy_p:+.2f}%)\n" if jpy_c else "💴 엔/원: 정보 없음\n"
-macro_text += f"🪙 비트코인: ${btc_c:,.2f} ({btc_d:+.2f} / {btc_p:+.2f}%)\n" if btc_c else "🪙 비트코인: 정보 없음\n"
-macro_text += f"🥇 금(온스당): ${gold_c:,.2f} ({gold_d:+.2f} / {gold_p:+.2f}%)\n" if gold_c else "🥇 금: 정보 없음\n"
-macro_text += f"🛢️ WTI 원유: ${wti_c:,.2f} ({wti_d:+.2f} / {wti_p:+.2f}%)\n" if wti_c else "🛢️ WTI 원유: 정보 없음\n"
-macro_text += f"📉 코스피 변동성(VKOSPI): {vkospi_c:,.2f} ({vkospi_d:+.2f} / {vkospi_p:+.2f}%)\n" if vkospi_c else "📉 코스피 변동성: 정보 없음\n"
-macro_text += f"📈 VIX(공포지수): {vix_c:,.2f} ({vix_d:+.2f} / {vix_p:+.2f}%)\n" if vix_c else "📈 VIX(공포지수): 정보 없음\n"
-macro_text += f"😨 공포·탐욕 지수: {fg_score}점 ({fg_rating})\n" if fg_score else "😨 공포·탐욕 지수: 정보 없음\n"
+macro_text += f"🇰🇷 코스닥: {kosdaq_c:,.2f} ({kosdaq_d:+.2f} / {kosdaq_p:+.2f}%)\n\n" if kosdaq_c else "🇰🇷 코스닥: 정보 없음\n\n"
+
+macro_text += "🏦 [양국 10년물 국채 금리]\n"
+macro_text += f"🇺🇸 미국 10년물: {us10y_c:,.3f}% ({us10y_d:+.3f} / {us10y_p:+.2f}%)\n" if us10y_c else "🇺🇸 미국 10년물: 정보 없음\n"
+macro_text += f"🇰🇷 한국 10년물: {kr10y_c:,.3f}% ({kr10y_d:+.3f} / {kr10y_p:+.2f}%)\n\n" if kr10y_c else "🇰🇷 한국 10년물: 정보 없음\n\n"
+
+macro_text += "💵 [환율 및 암호화폐, 원자재]\n"
+macro_text += f"달러/원: ₩{usd_c:,.2f} ({usd_d:+.2f} / {usd_p:+.2f}%)\n" if usd_c else "달러/원: 정보 없음\n"
+macro_text += f"엔/원(100엔): ₩{jpy_c:,.2f} ({jpy_d:+.2f} / {jpy_p:+.2f}%)\n" if jpy_c else "엔/원: 정보 없음\n"
+macro_text += f"비트코인: ${btc_c:,.2f} ({btc_d:+.2f} / {btc_p:+.2f}%)\n" if btc_c else "비트코인: 정보 없음\n"
+macro_text += f"금(온스당): ${gold_c:,.2f} ({gold_d:+.2f} / {gold_p:+.2f}%)\n" if gold_c else "금: 정보 없음\n"
+macro_text += f"WTI 원유: ${wti_c:,.2f} ({wti_d:+.2f} / {wti_p:+.2f}%)\n\n" if wti_c else "WTI 원유: 정보 없음\n\n"
+
+macro_text += "📉 [변동성 및 투자 심리]\n"
+macro_text += f"코스피 변동성(VKOSPI): {vkospi_c:,.2f} ({vkospi_d:+.2f} / {vkospi_p:+.2f}%)\n" if vkospi_c else "코스피 변동성: 정보 없음\n"
+macro_text += f"VIX(미국 공포지수): {vix_c:,.2f} ({vix_d:+.2f} / {vix_p:+.2f}%)\n" if vix_c else "VIX(공포지수): 정보 없음\n"
+macro_text += f"CNN 공포·탐욕 지수: {fg_score}점 ({fg_rating})\n" if fg_score else "CNN 공포·탐욕 지수: 정보 없음\n"
+
 
 # =====================================================================
-# 5. 맨 마지막: 글로벌 마감 시황 및 투자 조언 메시지 발송
+# 5. 맨 마지막: 글로벌 마감 시황 및 투자 조언 메시지 발송 (2분할 발송)
 # =====================================================================
 try:
-    global_message = f"🌍 [글로벌 마감 시황 및 투자 조언]\n\n{global_ai_analysis}{macro_text}"
-    if len(global_message) > 4000: global_message = global_message[:3900] + "\n\n(※ 내용 초과로 일부 요약됨)"
-    
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    requests.post(url, data={"chat_id": CHAT_ID, "text": global_message}, timeout=15)
+    
+    # 첫 번째 메시지 발송 (AI 분석 및 경제 일정)
+    msg_1 = f"🌍 [글로벌 마감 시황 및 경제 일정]\n\n{global_ai_analysis}"
+    requests.post(url, data={"chat_id": CHAT_ID, "text": msg_1[:4000]}, timeout=15)
+    
+    time.sleep(2)
+    
+    # 두 번째 메시지 발송 (거시 경제 지표 데이터 모음)
+    msg_2 = f"📊 [주요 경제 및 금융 지표 종합]\n\n{macro_text}"
+    requests.post(url, data={"chat_id": CHAT_ID, "text": msg_2[:4000]}, timeout=15)
+
 except Exception as e:
     print(f"글로벌 마감 시황 전송 중 오류 발생: {e}")
