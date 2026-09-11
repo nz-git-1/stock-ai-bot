@@ -84,16 +84,18 @@ try:
     if not global_news_text.strip():
         global_news_text = "최근 글로벌 주요 뉴스 없음"
 
-    # ★ 프롬프트 업데이트: 경제 지표 발표 일정 추가 요청
+    # ★ 프롬프트 고도화: 현재 날짜 주입 및 경제 캘린더 요약 지시
     global_prompt = f"""당신은 수석 글로벌 거시경제 애널리스트입니다. 
+현재 한국 시간은 {current_time}입니다.
 아래의 최근 글로벌 핵심 뉴스와 당신의 지식을 바탕으로 다음 2가지를 작성해 주세요.
 
 [글로벌 핵심 뉴스]
 {global_news_text}
 
 [요청 사항]
-1. 위 뉴스가 글로벌 금융 시장 및 국내 증시에 미칠 의미를 분석하고 투자 조언을 작성하세요.
-2. 오늘 혹은 이번 주 내에 예정된 **한국 및 미국의 주요 경제 지표 발표 일정(예: CPI, PPI, 수출입동향, 금리 결정 등)**을 리포트 하단에 요약해서 반드시 포함해 주세요.
+1. 위 뉴스가 글로벌 금융 시장 및 국내 증시에 미칠 의미를 심도 있게 분석하고 투자 조언을 작성하세요.
+2. {current_time}을 기준으로, '어제'와 '오늘' 발표된 한국 및 미국의 핵심 경제 지표(예: PPI, CPI 등 발표 결과)를 명시해 주세요. 
+3. 추가로 향후 1주일간 예정된 한국과 미국의 주요 경제 지표 발표 일정(예: 수출입동향, 금리 결정 등)을 일자별, 시간별로 상세히 요약하여 하단에 포함해 주세요.
 * 주의: 마크다운 기호(*, **, #)는 절대 사용하지 말고 텍스트와 이모지만 사용하세요."""
     
     global_ai_analysis = ask_ai(global_prompt)
@@ -130,6 +132,7 @@ for ticker in TICKERS:
             else:
                 display_name = info.get("shortName", ticker)
 
+            # 5일치 데이터를 기반으로 가장 최근 가격 확보
             hist = stock.history(period="5d")
             if not hist.empty:
                 raw_price_num = float(hist['Close'].iloc[-1])
@@ -229,12 +232,13 @@ for ticker in TICKERS:
     time.sleep(2)
 
 # =====================================================================
-# 4. 환율 및 주요 자산 데이터 수집 (한국 금리 스크래핑 추가)
+# 4. 환율 및 주요 자산 데이터 수집 (5일치 데이터 기반 에러율 최소화)
 # =====================================================================
 def get_macro_data(symbol, multiply=1):
     try:
         t = yf.Ticker(symbol)
-        hist = t.history(period="2d")
+        # 안정성을 위해 5일치 데이터를 불러와 가장 최근 2거래일의 데이터를 사용합니다.
+        hist = t.history(period="5d")
         
         if len(hist) >= 2:
             prev_close = hist['Close'].iloc[-2] * multiply
@@ -251,7 +255,6 @@ def get_macro_data(symbol, multiply=1):
         return None, None, None
 
 def get_kr_10y_bond():
-    # 야후 파이낸스 지원이 부족한 한국 10년물 국채 금리 네이버 직접 스크래핑
     try:
         url = "https://finance.naver.com/marketindex/interestDailyQuote.naver?marketindexCd=IRR_GOVT10Y"
         res = requests.get(url, headers=headers, timeout=10)
@@ -273,8 +276,11 @@ def get_fear_and_greed():
         if fg_res.status_code == 200:
             data = fg_res.json()
             score = round(data['fear_and_greed']['score'])
-            rating = data['fear_and_greed']['rating'].lower()
+            # 전일 종가(previous close) 확보하여 변동량 계산
+            prev_score = round(data['fear_and_greed']['previous_close'])
+            change = score - prev_score
             
+            rating = data['fear_and_greed']['rating'].lower()
             rating_map = {
                 "extreme fear": "극단적 공포",
                 "fear": "공포",
@@ -283,10 +289,10 @@ def get_fear_and_greed():
                 "extreme greed": "극단적 탐욕"
             }
             rating_kr = rating_map.get(rating, rating)
-            return score, rating_kr
+            return score, change, rating_kr
     except:
         pass
-    return None, None
+    return None, None, None
 
 # 증시 지수
 snp_c, snp_d, snp_p = get_macro_data("^GSPC")
@@ -306,7 +312,7 @@ gold_c, gold_d, gold_p = get_macro_data("GC=F")
 wti_c, wti_d, wti_p = get_macro_data("CL=F")
 vkospi_c, vkospi_d, vkospi_p = get_macro_data("^VKOSPI")
 vix_c, vix_d, vix_p = get_macro_data("^VIX")
-fg_score, fg_rating = get_fear_and_greed()
+fg_score, fg_change, fg_rating = get_fear_and_greed()
 
 macro_text = ""
 macro_text += "📈 [글로벌 및 국내 증시 지수]\n"
@@ -329,7 +335,7 @@ macro_text += f"WTI 원유: ${wti_c:,.2f} ({wti_d:+.2f} / {wti_p:+.2f}%)\n\n" if
 macro_text += "📉 [변동성 및 투자 심리]\n"
 macro_text += f"코스피 변동성(VKOSPI): {vkospi_c:,.2f} ({vkospi_d:+.2f} / {vkospi_p:+.2f}%)\n" if vkospi_c else "코스피 변동성: 정보 없음\n"
 macro_text += f"VIX(미국 공포지수): {vix_c:,.2f} ({vix_d:+.2f} / {vix_p:+.2f}%)\n" if vix_c else "VIX(공포지수): 정보 없음\n"
-macro_text += f"CNN 공포·탐욕 지수: {fg_score}점 ({fg_rating})\n" if fg_score else "CNN 공포·탐욕 지수: 정보 없음\n"
+macro_text += f"CNN 공포·탐욕 지수: {fg_score}점 ({fg_change:+.0f} / {fg_rating})\n" if fg_score is not None else "CNN 공포·탐욕 지수: 정보 없음\n"
 
 
 # =====================================================================
@@ -338,8 +344,8 @@ macro_text += f"CNN 공포·탐욕 지수: {fg_score}점 ({fg_rating})\n" if fg_
 try:
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     
-    # 첫 번째 메시지 발송 (AI 분석 및 경제 일정)
-    msg_1 = f"🌍 [글로벌 마감 시황 및 경제 일정]\n\n{global_ai_analysis}"
+    # 첫 번째 메시지 발송 (AI 분석 및 경제 캘린더 요약)
+    msg_1 = f"🌍 [글로벌 마감 시황 및 주요 경제 일정]\n\n{global_ai_analysis}"
     requests.post(url, data={"chat_id": CHAT_ID, "text": msg_1[:4000]}, timeout=15)
     
     time.sleep(2)
