@@ -5,6 +5,7 @@ import time
 import urllib.parse
 import xml.etree.ElementTree as ET
 import re
+import json
 from datetime import datetime, timezone, timedelta
 
 # =====================================================================
@@ -150,7 +151,7 @@ for ticker in TICKERS:
         if div != "N/A" and isinstance(div, (int, float)) and div > 20:
             div = "N/A (데이터 오류)"
 
-        # 최신 종목 뉴스 수집 (사용자 교정: when:1d 파라미터 제거)
+        # 최신 종목 뉴스 수집
         news_titles = []
         if is_korean:
             news_query = urllib.parse.quote(f"{display_name}")
@@ -172,12 +173,11 @@ for ticker in TICKERS:
                     trans_prompt = f"다음 영어 기사 제목들을 번역해 줘. 부연 설명이나 원래 영어 문장은 절대 쓰지 말고, 번역된 한국어 문장만 정확히 한 줄에 하나씩 출력해.\n\n제목들:\n{raw_joined}"
                     translated = ask_ai(trans_prompt)
                     
-                    # 파이썬 자체 강력 필터링 (한국어가 포함된 진짜 번역 문장만 추출)
+                    # 파이썬 자체 강력 필터링
                     for line in translated.split('\n'):
                         clean_line = re.sub(r'^(?:\d+\.|\-|\*|headline\s*\d*:?|draft.*?|translation.*?|refined.*?|output.*?|input.*?|task.*?)\s*', '', line, flags=re.IGNORECASE).strip('"-*[], ')
                         if not clean_line: continue
                         
-                        # 한국어 문자가 포함되어 있고, AI 찌꺼기 단어로 시작하지 않는 경우만 통과
                         if re.search(r'[가-힣]', clean_line) and not re.search(r'^(input|task|constraint|format|analysis)', clean_line, re.IGNORECASE):
                             news_titles.append(clean_line)
         except:
@@ -192,7 +192,6 @@ for ticker in TICKERS:
         if not news_text.strip():
             news_text = "최근 가용한 주요 뉴스 없음"
 
-        # 사용자 교정: 펀더멘털/매크로 분석이 포함된 전문 리포트 및 AI 6단계 스코어 적용
         prompt = f"""당신은 기관 투자자를 담당하는 수석 주식 애널리스트입니다.
 아래 데이터를 바탕으로 펀더멘털 및 매크로 분석이 포함된 전문적인 리포트를 작성하되, 마크다운 기호(*, **, #)를 절대 사용하지 마세요.
 
@@ -232,7 +231,7 @@ for ticker in TICKERS:
     time.sleep(2)
 
 # =====================================================================
-# 4. 환율 및 주요 자산 데이터 수집 (전일 대비 등락률 포함)
+# 4. 환율 및 주요 자산 데이터 수집 (새로운 지표 통합)
 # =====================================================================
 def get_macro_data(symbol, multiply=1):
     try:
@@ -253,18 +252,53 @@ def get_macro_data(symbol, multiply=1):
     except:
         return None, None, None
 
+def get_fear_and_greed():
+    try:
+        fg_url = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata"
+        fg_res = requests.get(fg_url, headers=headers, timeout=10)
+        if fg_res.status_code == 200:
+            data = fg_res.json()
+            score = round(data['fear_and_greed']['score'])
+            rating = data['fear_and_greed']['rating'].lower()
+            
+            # 한국어 상태 변환
+            rating_map = {
+                "extreme fear": "극단적 공포",
+                "fear": "공포",
+                "neutral": "중립",
+                "greed": "탐욕",
+                "extreme greed": "극단적 탐욕"
+            }
+            rating_kr = rating_map.get(rating, rating)
+            return score, rating_kr
+    except:
+        pass
+    return None, None
+
+# 지표 수집
+kospi_c, kospi_d, kospi_p = get_macro_data("^KS11")
+kosdaq_c, kosdaq_d, kosdaq_p = get_macro_data("^KQ11")
 usd_c, usd_d, usd_p = get_macro_data("USDKRW=X")
 jpy_c, jpy_d, jpy_p = get_macro_data("JPYKRW=X", 100)
 thb_c, thb_d, thb_p = get_macro_data("THBKRW=X")
 btc_c, btc_d, btc_p = get_macro_data("BTC-USD")
 gold_c, gold_d, gold_p = get_macro_data("GC=F")
+wti_c, wti_d, wti_p = get_macro_data("CL=F")
+vkospi_c, vkospi_d, vkospi_p = get_macro_data("^VKOSPI")
+vix_c, vix_d, vix_p = get_macro_data("^VIX")
+fg_score, fg_rating = get_fear_and_greed()
 
 macro_text = "\n\n📊 [주요 경제 지표]\n"
+macro_text += f"🇰🇷 코스피: {kospi_c:,.2f} ({kospi_d:+.2f} / {kospi_p:+.2f}%)\n" if kospi_c else "🇰🇷 코스피: 정보 없음\n"
+macro_text += f"🇰🇷 코스닥: {kosdaq_c:,.2f} ({kosdaq_d:+.2f} / {kosdaq_p:+.2f}%)\n" if kosdaq_c else "🇰🇷 코스닥: 정보 없음\n"
 macro_text += f"💵 달러/원: ₩{usd_c:,.2f} ({usd_d:+.2f} / {usd_p:+.2f}%)\n" if usd_c else "💵 달러/원: 정보 없음\n"
 macro_text += f"💴 엔/원(100엔): ₩{jpy_c:,.2f} ({jpy_d:+.2f} / {jpy_p:+.2f}%)\n" if jpy_c else "💴 엔/원: 정보 없음\n"
-macro_text += f"🇹🇭 바트/원: ₩{thb_c:,.2f} ({thb_d:+.2f} / {thb_p:+.2f}%)\n" if thb_c else "🇹🇭 바트/원: 정보 없음\n"
 macro_text += f"🪙 비트코인: ${btc_c:,.2f} ({btc_d:+.2f} / {btc_p:+.2f}%)\n" if btc_c else "🪙 비트코인: 정보 없음\n"
 macro_text += f"🥇 금(온스당): ${gold_c:,.2f} ({gold_d:+.2f} / {gold_p:+.2f}%)\n" if gold_c else "🥇 금: 정보 없음\n"
+macro_text += f"🛢️ WTI 원유: ${wti_c:,.2f} ({wti_d:+.2f} / {wti_p:+.2f}%)\n" if wti_c else "🛢️ WTI 원유: 정보 없음\n"
+macro_text += f"📉 코스피 변동성(VKOSPI): {vkospi_c:,.2f} ({vkospi_d:+.2f} / {vkospi_p:+.2f}%)\n" if vkospi_c else "📉 코스피 변동성: 정보 없음\n"
+macro_text += f"📈 VIX(공포지수): {vix_c:,.2f} ({vix_d:+.2f} / {vix_p:+.2f}%)\n" if vix_c else "📈 VIX(공포지수): 정보 없음\n"
+macro_text += f"😨 공포·탐욕 지수: {fg_score}점 ({fg_rating})\n" if fg_score else "😨 공포·탐욕 지수: 정보 없음\n"
 
 # =====================================================================
 # 5. 맨 마지막: 글로벌 마감 시황 및 투자 조언 메시지 발송
