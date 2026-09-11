@@ -65,16 +65,17 @@ def get_val(info, key, multiplier=1):
 headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
 
 # =====================================================================
-# 2. 글로벌 금융 시장 시황 선행 수집 및 분석 (경제 일정 및 지표 분석 포함)
+# 2. 글로벌 금융 시장 시황 및 연준(Fed) 발언 수집
 # =====================================================================
 global_ai_analysis = ""
 try:
+    # 2-1. 일반 글로벌/미국 증시 뉴스 수집
     global_news_query = urllib.parse.quote("글로벌 증시 OR 미국 증시")
     global_news_url = f"https://news.google.com/rss/search?q={global_news_query}&hl=ko&gl=KR&ceid=KR:ko"
     
     res = requests.get(global_news_url, headers=headers, timeout=15)
     root = ET.fromstring(res.text)
-    global_raw_titles = [item.find('title').text for item in root.findall('.//channel/item')[:5]]
+    global_raw_titles = [item.find('title').text for item in root.findall('.//channel/item')[:4]]
     
     global_news_text = ""
     for t in global_raw_titles:
@@ -84,19 +85,38 @@ try:
     if not global_news_text.strip():
         global_news_text = "최근 글로벌 주요 뉴스 없음"
 
-    # ★ 프롬프트 업데이트: 발표된 지표 수치 비교 및 호재/악재 심층 분석 요청 추가
+    # 2-2. 연준(Fed), 파월, FOMC 전용 뉴스 수집 (영어 원문)
+    fed_news_query = urllib.parse.quote("Jerome Powell OR FOMC OR Federal Reserve speech when:1d")
+    fed_news_url = f"https://news.google.com/rss/search?q={fed_news_query}&hl=en-US&gl=US&ceid=US:en"
+    
+    fed_res = requests.get(fed_news_url, headers=headers, timeout=15)
+    fed_root = ET.fromstring(fed_res.text)
+    fed_raw_titles = [item.find('title').text for item in fed_root.findall('.//channel/item')[:4]]
+    
+    fed_news_text = ""
+    for t in fed_raw_titles:
+        clean_title = t.replace('&quot;', '"').replace('&amp;', '&')
+        fed_news_text += f"- {clean_title}\n"
+
+    if not fed_news_text.strip():
+        fed_news_text = "최근 24시간 내 연준(Fed) 관련 주요 발언 및 뉴스 없음"
+
+    # ★ 프롬프트 업데이트: 연준 발언 분석 추가
     global_prompt = f"""당신은 수석 글로벌 거시경제 애널리스트입니다. 
 현재 한국 시간은 {current_time}입니다.
-아래의 최근 글로벌 핵심 뉴스와 당신의 지식을 바탕으로 다음 3가지를 명확히 분리하여 작성해 주세요.
+아래의 최근 글로벌 핵심 뉴스와 연방준비제도(Fed) 관련 뉴스를 바탕으로 다음 3가지를 작성해 주세요.
 
-[글로벌 핵심 뉴스]
+[글로벌 증시 핵심 뉴스]
 {global_news_text}
 
+[연준(Fed) 및 FOMC 관련 최근 동향]
+{fed_news_text}
+
 [요청 사항]
-1. 위 뉴스가 글로벌 금융 시장 및 국내 증시에 미칠 의미를 심도 있게 분석하고 전반적인 투자 조언을 작성하세요.
-2. {current_time}을 기준으로 '어제'와 '오늘' 이미 발표된 한국 및 미국의 핵심 경제 지표(예: CPI, PPI, 고용지표 등)가 있다면, 반드시 '실제 발표 수치'와 '시장 예상치(또는 이전치)'를 비교해서 명시해 주세요. 또한 이 결과가 현재 경제 상황과 증시에 긍정적인지(호재) 부정적인지(악재) 심층적인 해석과 조언을 덧붙여 주세요.
-3. 향후 1주일간 예정된 한국과 미국의 주요 경제 지표 발표 일정(예: 수출입동향, 금리 결정 등)을 일자별, 시간별로 상세히 요약하여 포함해 주세요.
-* 주의: 마크다운 기호(*, **, #)는 절대 사용하지 말고 텍스트와 이모지만 깔끔하게 사용하세요."""
+1. 위 뉴스가 글로벌 금융 시장 및 국내 증시에 미칠 의미를 심도 있게 분석하고 투자 조언을 작성하세요.
+2. 연준 의장(제롬 파월) 및 연은 총재들의 발언, 혹은 FOMC 회의 내용이 포함되어 있다면 그 숨은 의미(매파적/비둘기파적 스탠스)와 시장 금리 및 주가에 미치는 파급력을 집중적으로 분석해 주세요.
+3. {current_time}을 기준으로, '어제'와 '오늘' 발표된 한국 및 미국의 핵심 경제 지표(예: PPI, CPI 등 발표 결과)를 명시하고, 추가로 향후 1주일간 예정된 주요 경제 지표 일정(수출입동향, 기준금리 결정 등)을 일자별, 시간별로 상세히 요약하여 하단에 포함해 주세요.
+* 주의: 마크다운 기호(*, **, #)는 절대 사용하지 말고 텍스트와 이모지만 사용하세요."""
     
     global_ai_analysis = ask_ai(global_prompt)
     if global_ai_analysis: 
@@ -231,7 +251,7 @@ for ticker in TICKERS:
     time.sleep(2)
 
 # =====================================================================
-# 4. 환율 및 주요 자산 데이터 수집 (5일치 데이터 기반 안정성 강화)
+# 4. 환율 및 주요 자산 데이터 수집
 # =====================================================================
 def get_macro_data(symbol, multiply=1):
     try:
@@ -291,17 +311,14 @@ def get_fear_and_greed():
         pass
     return None, None, None
 
-# 증시 지수
 snp_c, snp_d, snp_p = get_macro_data("^GSPC")
 nasdaq_c, nasdaq_d, nasdaq_p = get_macro_data("^IXIC")
 kospi_c, kospi_d, kospi_p = get_macro_data("^KS11")
 kosdaq_c, kosdaq_d, kosdaq_p = get_macro_data("^KQ11")
 
-# 금리
 us10y_c, us10y_d, us10y_p = get_macro_data("^TNX")
 kr10y_c, kr10y_d, kr10y_p = get_kr_10y_bond()
 
-# 환율 및 원자재, 변동성
 usd_c, usd_d, usd_p = get_macro_data("USDKRW=X")
 jpy_c, jpy_d, jpy_p = get_macro_data("JPYKRW=X", 100)
 btc_c, btc_d, btc_p = get_macro_data("BTC-USD")
@@ -340,7 +357,7 @@ macro_text += f"CNN 공포·탐욕 지수: {fg_score}점 ({fg_change:+.0f} / {fg
 try:
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     
-    # 첫 번째 메시지 발송 (AI 분석 및 경제 캘린더 요약)
+    # 첫 번째 메시지 발송 (AI 분석, 연준 분석 및 경제 캘린더 요약)
     msg_1 = f"🌍 [글로벌 마감 시황 및 주요 경제 일정]\n\n{global_ai_analysis}"
     requests.post(url, data={"chat_id": CHAT_ID, "text": msg_1[:4000]}, timeout=15)
     
