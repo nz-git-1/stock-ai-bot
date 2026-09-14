@@ -85,8 +85,9 @@ try:
     if not global_news_text.strip():
         global_news_text = "최근 글로벌 주요 뉴스 없음"
 
-    # 2-2. 연준(Fed), 파월, FOMC 전용 뉴스 수집 (영어 원문)
-    fed_news_query = urllib.parse.quote("Jerome Powell OR FOMC OR Federal Reserve speech when:1d")
+    # 2-2. 연준(Fed), 신임 의장, FOMC 전용 뉴스 수집 (영어 원문)
+    # ★ 수정 포인트: 제롬 파월에서 현 의장인 케빈 워시(Kevin Warsh)로 업데이트
+    fed_news_query = urllib.parse.quote("Kevin Warsh OR FOMC OR Federal Reserve speech")
     fed_news_url = f"https://news.google.com/rss/search?q={fed_news_query}&hl=en-US&gl=US&ceid=US:en"
     
     fed_res = requests.get(fed_news_url, headers=headers, timeout=15)
@@ -99,9 +100,9 @@ try:
         fed_news_text += f"- {clean_title}\n"
 
     if not fed_news_text.strip():
-        fed_news_text = "최근 24시간 내 연준(Fed) 관련 주요 발언 및 뉴스 없음"
+        fed_news_text = "최근 연준(Fed) 관련 주요 발언 및 뉴스 없음"
 
-    # ★ 프롬프트 업데이트: 연준 발언 분석 추가
+    # ★ 프롬프트 업데이트: 연준 의장 이름 교정 및 분석 지시 강화
     global_prompt = f"""당신은 수석 글로벌 거시경제 애널리스트입니다. 
 현재 한국 시간은 {current_time}입니다.
 아래의 최근 글로벌 핵심 뉴스와 연방준비제도(Fed) 관련 뉴스를 바탕으로 다음 3가지를 작성해 주세요.
@@ -114,7 +115,7 @@ try:
 
 [요청 사항]
 1. 위 뉴스가 글로벌 금융 시장 및 국내 증시에 미칠 의미를 심도 있게 분석하고 투자 조언을 작성하세요.
-2. 연준 의장(제롬 파월) 및 연은 총재들의 발언, 혹은 FOMC 회의 내용이 포함되어 있다면 그 숨은 의미(매파적/비둘기파적 스탠스)와 시장 금리 및 주가에 미치는 파급력을 집중적으로 분석해 주세요.
+2. 연준 의장(케빈 워시) 및 연은 총재들의 발언, 혹은 FOMC 회의 내용이 포함되어 있다면 그 숨은 의미(매파적/비둘기파적 스탠스)와 시장 금리 및 주가에 미치는 파급력을 집중적으로 분석해 주세요.
 3. {current_time}을 기준으로, '어제'와 '오늘' 발표된 한국 및 미국의 핵심 경제 지표(예: PPI, CPI 등 발표 결과)를 명시하고, 추가로 향후 1주일간 예정된 주요 경제 지표 일정(수출입동향, 기준금리 결정 등)을 일자별, 시간별로 상세히 요약하여 하단에 포함해 주세요.
 * 주의: 마크다운 기호(*, **, #)는 절대 사용하지 말고 텍스트와 이모지만 사용하세요."""
     
@@ -251,7 +252,7 @@ for ticker in TICKERS:
     time.sleep(2)
 
 # =====================================================================
-# 4. 환율 및 주요 자산 데이터 수집
+# 4. 환율 및 주요 자산 데이터 수집 
 # =====================================================================
 def get_macro_data(symbol, multiply=1):
     try:
