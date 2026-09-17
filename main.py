@@ -46,12 +46,13 @@ def ask_ai(prompt):
         }
         for _ in range(2):
             try:
-                res = requests.post(url, headers={'Content-Type': 'application/json'}, json=payload, timeout=20).json()
+                # ★ AI가 캘린더를 꼼꼼히 정리할 수 있도록 대기 시간을 35초로 연장
+                res = requests.post(url, headers={'Content-Type': 'application/json'}, json=payload, timeout=35).json()
                 if "candidates" in res:
                     return res['candidates'][0]['content']['parts'][0]['text'].strip()
                 break 
             except Exception:
-                time.sleep(1)
+                time.sleep(2)
     return "AI 분석 생성 실패"
 
 def get_val(info, key, multiplier=1):
@@ -69,7 +70,6 @@ headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/
 # =====================================================================
 global_ai_analysis = ""
 try:
-    # 2-1. 일반 글로벌/미국 증시 뉴스 수집
     global_news_query = urllib.parse.quote("글로벌 증시 OR 미국 증시")
     global_news_url = f"https://news.google.com/rss/search?q={global_news_query}&hl=ko&gl=KR&ceid=KR:ko"
     
@@ -85,8 +85,6 @@ try:
     if not global_news_text.strip():
         global_news_text = "최근 글로벌 주요 뉴스 없음"
 
-    # 2-2. 연준(Fed), 신임 의장, FOMC 전용 뉴스 수집 (영어 원문)
-    # ★ 수정 포인트: 제롬 파월에서 현 의장인 케빈 워시(Kevin Warsh)로 업데이트
     fed_news_query = urllib.parse.quote("Kevin Warsh OR FOMC OR Federal Reserve speech")
     fed_news_url = f"https://news.google.com/rss/search?q={fed_news_query}&hl=en-US&gl=US&ceid=US:en"
     
@@ -99,10 +97,6 @@ try:
         clean_title = t.replace('&quot;', '"').replace('&amp;', '&')
         fed_news_text += f"- {clean_title}\n"
 
-    if not fed_news_text.strip():
-        fed_news_text = "최근 연준(Fed) 관련 주요 발언 및 뉴스 없음"
-
-    # ★ 프롬프트 업데이트: 연준 의장 이름 교정 및 분석 지시 강화
     global_prompt = f"""당신은 수석 글로벌 거시경제 애널리스트입니다. 
 현재 한국 시간은 {current_time}입니다.
 아래의 최근 글로벌 핵심 뉴스와 연방준비제도(Fed) 관련 뉴스를 바탕으로 다음 3가지를 작성해 주세요.
@@ -115,8 +109,8 @@ try:
 
 [요청 사항]
 1. 위 뉴스가 글로벌 금융 시장 및 국내 증시에 미칠 의미를 심도 있게 분석하고 투자 조언을 작성하세요.
-2. 연준 의장(케빈 워시) 및 연은 총재들의 발언, 혹은 FOMC 회의 내용이 포함되어 있다면 그 숨은 의미(매파적/비둘기파적 스탠스)와 시장 금리 및 주가에 미치는 파급력을 집중적으로 분석해 주세요.
-3. {current_time}을 기준으로, '어제'와 '오늘' 발표된 한국 및 미국의 핵심 경제 지표(예: PPI, CPI 등 발표 결과)를 명시하고, 추가로 향후 1주일간 예정된 주요 경제 지표 일정(수출입동향, 기준금리 결정 등)을 일자별, 시간별로 상세히 요약하여 하단에 포함해 주세요.
+2. 연준 의장(케빈 워시) 및 연은 총재들의 발언, 혹은 FOMC 회의 내용이 포함되어 있다면 그 숨은 의미(매파적/비둘기파적 스탠스)와 파급력을 집중 분석해 주세요.
+3. {current_time}을 기준으로, '어제'와 '오늘' 발표된 한국 및 미국의 핵심 경제 지표(PPI, CPI 등)를 명시하고, 향후 1주일간 예정된 주요 경제 지표 일정(수출입동향, 기준금리 결정 등)을 일자별, 시간별로 상세히 요약하여 하단에 포함해 주세요.
 * 주의: 마크다운 기호(*, **, #)는 절대 사용하지 말고 텍스트와 이모지만 사용하세요."""
     
     global_ai_analysis = ask_ai(global_prompt)
@@ -247,18 +241,17 @@ for ticker in TICKERS:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
         requests.post(url, data={"chat_id": CHAT_ID, "text": final_message}, timeout=15)
     except Exception as e:
-        print(f"텔레그램 발송 실패 (종목: {ticker}): {e}")
+        pass
         
     time.sleep(2)
 
 # =====================================================================
-# 4. 환율 및 주요 자산 데이터 수집 
+# 4. 환율 및 주요 자산 데이터 수집 (네이버 이중 스크래핑 강화)
 # =====================================================================
 def get_macro_data(symbol, multiply=1):
     try:
         t = yf.Ticker(symbol)
         hist = t.history(period="5d")
-        
         if len(hist) >= 2:
             prev_close = hist['Close'].iloc[-2] * multiply
             current = hist['Close'].iloc[-1] * multiply
@@ -273,7 +266,42 @@ def get_macro_data(symbol, multiply=1):
     except:
         return None, None, None
 
+def get_vkospi_naver():
+    # ★ 코스피 변동성 지표 네이버 직접 스크래핑 추가
+    try:
+        url = "https://finance.naver.com/sise/sise_index.naver?code=VPI200"
+        res = requests.get(url, headers=headers, timeout=10)
+        now_m = re.search(r'id="now_value">([0-9.]+)', res.text)
+        change_m = re.search(r'id="change_value_and_rate">(.*?)</span>', res.text)
+        if now_m:
+            current = float(now_m.group(1))
+            change = 0.0
+            change_pct = 0.0
+            if change_m:
+                c_text = change_m.group(1)
+                nums = re.findall(r'([0-9.]+)', c_text)
+                if len(nums) >= 2:
+                    change = float(nums[0])
+                    change_pct = float(nums[1])
+                    if "하락" in c_text or "minus" in c_text:
+                        change = -change
+                        change_pct = -change_pct
+            return current, change, change_pct
+    except:
+        pass
+    return None, None, None
+
 def get_kr_10y_bond():
+    # ★ 한국 국고채 10년물 이중 수집망 구축
+    try:
+        hist = yf.Ticker("KR10YT=RR").history(period="5d")
+        if len(hist) >= 2:
+            prev = hist['Close'].iloc[-2]
+            curr = hist['Close'].iloc[-1]
+            return curr, curr - prev, ((curr - prev) / prev) * 100 if prev > 0 else 0
+    except:
+        pass
+
     try:
         url = "https://finance.naver.com/marketindex/interestDailyQuote.naver?marketindexCd=IRR_GOVT10Y"
         res = requests.get(url, headers=headers, timeout=10)
@@ -322,10 +350,16 @@ kr10y_c, kr10y_d, kr10y_p = get_kr_10y_bond()
 
 usd_c, usd_d, usd_p = get_macro_data("USDKRW=X")
 jpy_c, jpy_d, jpy_p = get_macro_data("JPYKRW=X", 100)
+thb_c, thb_d, thb_p = get_macro_data("THBKRW=X") # ★ 태국 바트화(THB) 추가
 btc_c, btc_d, btc_p = get_macro_data("BTC-USD")
 gold_c, gold_d, gold_p = get_macro_data("GC=F")
 wti_c, wti_d, wti_p = get_macro_data("CL=F")
-vkospi_c, vkospi_d, vkospi_p = get_macro_data("^VKOSPI")
+
+# VKOSPI는 네이버 스크래핑을 우선 적용
+vkospi_c, vkospi_d, vkospi_p = get_vkospi_naver()
+if not vkospi_c:
+    vkospi_c, vkospi_d, vkospi_p = get_macro_data("^VKOSPI")
+
 vix_c, vix_d, vix_p = get_macro_data("^VIX")
 fg_score, fg_change, fg_rating = get_fear_and_greed()
 
@@ -343,6 +377,7 @@ macro_text += f"🇰🇷 한국 10년물: {kr10y_c:,.3f}% ({kr10y_d:+.3f} / {kr1
 macro_text += "💵 [환율 및 암호화폐, 원자재]\n"
 macro_text += f"달러/원: ₩{usd_c:,.2f} ({usd_d:+.2f} / {usd_p:+.2f}%)\n" if usd_c else "달러/원: 정보 없음\n"
 macro_text += f"엔/원(100엔): ₩{jpy_c:,.2f} ({jpy_d:+.2f} / {jpy_p:+.2f}%)\n" if jpy_c else "엔/원: 정보 없음\n"
+macro_text += f"🇹🇭 바트/원: ₩{thb_c:,.2f} ({thb_d:+.2f} / {thb_p:+.2f}%)\n" if thb_c else "🇹🇭 바트/원: 정보 없음\n"
 macro_text += f"비트코인: ${btc_c:,.2f} ({btc_d:+.2f} / {btc_p:+.2f}%)\n" if btc_c else "비트코인: 정보 없음\n"
 macro_text += f"금(온스당): ${gold_c:,.2f} ({gold_d:+.2f} / {gold_p:+.2f}%)\n" if gold_c else "금: 정보 없음\n"
 macro_text += f"WTI 원유: ${wti_c:,.2f} ({wti_d:+.2f} / {wti_p:+.2f}%)\n\n" if wti_c else "WTI 원유: 정보 없음\n\n"
@@ -369,4 +404,4 @@ try:
     requests.post(url, data={"chat_id": CHAT_ID, "text": msg_2[:4000]}, timeout=15)
 
 except Exception as e:
-    print(f"글로벌 마감 시황 전송 중 오류 발생: {e}")
+    pass
