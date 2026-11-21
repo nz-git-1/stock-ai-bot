@@ -46,7 +46,6 @@ def ask_ai(prompt):
         }
         for _ in range(2):
             try:
-                # ★ AI가 캘린더를 꼼꼼히 정리할 수 있도록 대기 시간을 35초로 연장
                 res = requests.post(url, headers={'Content-Type': 'application/json'}, json=payload, timeout=35).json()
                 if "candidates" in res:
                     return res['candidates'][0]['content']['parts'][0]['text'].strip()
@@ -246,7 +245,7 @@ for ticker in TICKERS:
     time.sleep(2)
 
 # =====================================================================
-# 4. 환율 및 주요 자산 데이터 수집 (네이버 이중 스크래핑 강화)
+# 4. 환율, 주요 자산 및 나스닥 RSI 데이터 수집
 # =====================================================================
 def get_macro_data(symbol, multiply=1):
     try:
@@ -267,7 +266,6 @@ def get_macro_data(symbol, multiply=1):
         return None, None, None
 
 def get_vkospi_naver():
-    # ★ 코스피 변동성 지표 네이버 직접 스크래핑 추가
     try:
         url = "https://finance.naver.com/sise/sise_index.naver?code=VPI200"
         res = requests.get(url, headers=headers, timeout=10)
@@ -292,7 +290,6 @@ def get_vkospi_naver():
     return None, None, None
 
 def get_kr_10y_bond():
-    # ★ 한국 국고채 10년물 이중 수집망 구축
     try:
         hist = yf.Ticker("KR10YT=RR").history(period="5d")
         if len(hist) >= 2:
@@ -340,6 +337,53 @@ def get_fear_and_greed():
         pass
     return None, None, None
 
+# ★ 나스닥 14일 RSI 계산 함수 추가
+def get_nasdaq_rsi(rsi_period=14):
+    try:
+        t = yf.Ticker("^IXIC")
+        hist = t.history(period="2mo")
+        if hist.empty or len(hist) <= rsi_period:
+            return None, None
+
+        closes = [float(x) for x in hist['Close'].dropna().tolist()]
+        if len(closes) <= rsi_period:
+            return None, None
+
+        gains = []
+        losses = []
+        for i in range(1, len(closes)):
+            diff = closes[i] - closes[i - 1]
+            gains.append(max(diff, 0.0))
+            losses.append(max(-diff, 0.0))
+
+        if len(gains) < rsi_period:
+            return None, None
+
+        avg_gain = sum(gains[:rsi_period]) / rsi_period
+        avg_loss = sum(losses[:rsi_period]) / rsi_period
+
+        for i in range(rsi_period, len(gains)):
+            avg_gain = (avg_gain * (rsi_period - 1) + gains[i]) / rsi_period
+            avg_loss = (avg_loss * (rsi_period - 1) + losses[i]) / rsi_period
+
+        if avg_loss == 0:
+            rsi_val = 100.0
+        else:
+            rs = avg_gain / avg_loss
+            rsi_val = 100.0 - (100.0 / (1.0 + rs))
+
+        rsi_rounded = round(rsi_val, 2)
+        if rsi_rounded >= 70:
+            status = "과매수"
+        elif rsi_rounded <= 30:
+            status = "과매도"
+        else:
+            status = "중립"
+
+        return rsi_rounded, status
+    except:
+        return None, None
+
 snp_c, snp_d, snp_p = get_macro_data("^GSPC")
 nasdaq_c, nasdaq_d, nasdaq_p = get_macro_data("^IXIC")
 kospi_c, kospi_d, kospi_p = get_macro_data("^KS11")
@@ -350,18 +394,18 @@ kr10y_c, kr10y_d, kr10y_p = get_kr_10y_bond()
 
 usd_c, usd_d, usd_p = get_macro_data("USDKRW=X")
 jpy_c, jpy_d, jpy_p = get_macro_data("JPYKRW=X", 100)
-thb_c, thb_d, thb_p = get_macro_data("THBKRW=X") # ★ 태국 바트화(THB) 추가
+thb_c, thb_d, thb_p = get_macro_data("THBKRW=X")
 btc_c, btc_d, btc_p = get_macro_data("BTC-USD")
 gold_c, gold_d, gold_p = get_macro_data("GC=F")
 wti_c, wti_d, wti_p = get_macro_data("CL=F")
 
-# VKOSPI는 네이버 스크래핑을 우선 적용
 vkospi_c, vkospi_d, vkospi_p = get_vkospi_naver()
 if not vkospi_c:
     vkospi_c, vkospi_d, vkospi_p = get_macro_data("^VKOSPI")
 
 vix_c, vix_d, vix_p = get_macro_data("^VIX")
 fg_score, fg_change, fg_rating = get_fear_and_greed()
+nasdaq_rsi, nasdaq_rsi_status = get_nasdaq_rsi(14)
 
 macro_text = ""
 macro_text += "📈 [글로벌 및 국내 증시 지수]\n"
@@ -386,6 +430,7 @@ macro_text += "📉 [변동성 및 투자 심리]\n"
 macro_text += f"코스피 변동성(VKOSPI): {vkospi_c:,.2f} ({vkospi_d:+.2f} / {vkospi_p:+.2f}%)\n" if vkospi_c else "코스피 변동성: 정보 없음\n"
 macro_text += f"VIX(미국 공포지수): {vix_c:,.2f} ({vix_d:+.2f} / {vix_p:+.2f}%)\n" if vix_c else "VIX(공포지수): 정보 없음\n"
 macro_text += f"CNN 공포·탐욕 지수: {fg_score}점 ({fg_change:+.0f} / {fg_rating})\n" if fg_score is not None else "CNN 공포·탐욕 지수: 정보 없음\n"
+macro_text += f"나스닥 RSI(14일): {nasdaq_rsi:.2f}점 ({nasdaq_rsi_status})\n" if nasdaq_rsi is not None else "나스닥 RSI(14일): 정보 없음\n"
 
 # =====================================================================
 # 5. 맨 마지막: 글로벌 마감 시황 및 투자 조언 메시지 발송 (2분할 발송)
