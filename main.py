@@ -62,6 +62,53 @@ def get_val(info, key, multiplier=1):
     except:
         return "N/A"
 
+# ★ 범용 14일 RSI 계산 함수 (개별 종목 및 나스닥 지수 공용)
+def get_rsi(symbol, rsi_period=14):
+    try:
+        t = yf.Ticker(symbol)
+        hist = t.history(period="2mo")
+        if hist.empty or len(hist) <= rsi_period:
+            return None, None
+
+        closes = [float(x) for x in hist['Close'].dropna().tolist()]
+        if len(closes) <= rsi_period:
+            return None, None
+
+        gains = []
+        losses = []
+        for i in range(1, len(closes)):
+            diff = closes[i] - closes[i - 1]
+            gains.append(max(diff, 0.0))
+            losses.append(max(-diff, 0.0))
+
+        if len(gains) < rsi_period:
+            return None, None
+
+        avg_gain = sum(gains[:rsi_period]) / rsi_period
+        avg_loss = sum(losses[:rsi_period]) / rsi_period
+
+        for i in range(rsi_period, len(gains)):
+            avg_gain = (avg_gain * (rsi_period - 1) + gains[i]) / rsi_period
+            avg_loss = (avg_loss * (rsi_period - 1) + losses[i]) / rsi_period
+
+        if avg_loss == 0:
+            rsi_val = 100.0
+        else:
+            rs = avg_gain / avg_loss
+            rsi_val = 100.0 - (100.0 / (1.0 + rs))
+
+        rsi_rounded = round(rsi_val, 2)
+        if rsi_rounded >= 70:
+            status = "과매수"
+        elif rsi_rounded <= 30:
+            status = "과매도"
+        else:
+            status = "중립"
+
+        return rsi_rounded, status
+    except:
+        return None, None
+
 headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
 
 # =====================================================================
@@ -167,6 +214,10 @@ for ticker in TICKERS:
         if div != "N/A" and isinstance(div, (int, float)) and div > 20:
             div = "N/A (데이터 오류)"
 
+        # ★ 개별 종목 14일 RSI 계산
+        stock_rsi, stock_rsi_status = get_rsi(ticker, 14)
+        rsi_str = f"{stock_rsi:.2f}점 ({stock_rsi_status})" if stock_rsi is not None else "N/A"
+
         news_titles = []
         if is_korean:
             news_query = urllib.parse.quote(f"{display_name}")
@@ -197,7 +248,7 @@ for ticker in TICKERS:
         except:
             pass
 
-        stock_data = f"현재가: {currency}{price}\nPER: {per} (내년 예상: {f_per})\nPBR: {pbr}\nROE: {roe}%\n부채비율: {debt}%\n배당수익률: {div}%"
+        stock_data = f"현재가: {currency}{price}\nPER: {per} (내년 예상: {f_per})\nPBR: {pbr}\nROE: {roe}%\n부채비율: {debt}%\n배당수익률: {div}%\nRSI(14일): {rsi_str}"
         
         news_text = ""
         for t in news_titles[:3]:
@@ -337,53 +388,6 @@ def get_fear_and_greed():
         pass
     return None, None, None
 
-# ★ 나스닥 14일 RSI 계산 함수 추가
-def get_nasdaq_rsi(rsi_period=14):
-    try:
-        t = yf.Ticker("^IXIC")
-        hist = t.history(period="2mo")
-        if hist.empty or len(hist) <= rsi_period:
-            return None, None
-
-        closes = [float(x) for x in hist['Close'].dropna().tolist()]
-        if len(closes) <= rsi_period:
-            return None, None
-
-        gains = []
-        losses = []
-        for i in range(1, len(closes)):
-            diff = closes[i] - closes[i - 1]
-            gains.append(max(diff, 0.0))
-            losses.append(max(-diff, 0.0))
-
-        if len(gains) < rsi_period:
-            return None, None
-
-        avg_gain = sum(gains[:rsi_period]) / rsi_period
-        avg_loss = sum(losses[:rsi_period]) / rsi_period
-
-        for i in range(rsi_period, len(gains)):
-            avg_gain = (avg_gain * (rsi_period - 1) + gains[i]) / rsi_period
-            avg_loss = (avg_loss * (rsi_period - 1) + losses[i]) / rsi_period
-
-        if avg_loss == 0:
-            rsi_val = 100.0
-        else:
-            rs = avg_gain / avg_loss
-            rsi_val = 100.0 - (100.0 / (1.0 + rs))
-
-        rsi_rounded = round(rsi_val, 2)
-        if rsi_rounded >= 70:
-            status = "과매수"
-        elif rsi_rounded <= 30:
-            status = "과매도"
-        else:
-            status = "중립"
-
-        return rsi_rounded, status
-    except:
-        return None, None
-
 snp_c, snp_d, snp_p = get_macro_data("^GSPC")
 nasdaq_c, nasdaq_d, nasdaq_p = get_macro_data("^IXIC")
 kospi_c, kospi_d, kospi_p = get_macro_data("^KS11")
@@ -405,7 +409,7 @@ if not vkospi_c:
 
 vix_c, vix_d, vix_p = get_macro_data("^VIX")
 fg_score, fg_change, fg_rating = get_fear_and_greed()
-nasdaq_rsi, nasdaq_rsi_status = get_nasdaq_rsi(14)
+nasdaq_rsi, nasdaq_rsi_status = get_rsi("^IXIC", 14)
 
 macro_text = ""
 macro_text += "📈 [글로벌 및 국내 증시 지수]\n"
@@ -438,13 +442,11 @@ macro_text += f"나스닥 RSI(14일): {nasdaq_rsi:.2f}점 ({nasdaq_rsi_status})\
 try:
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     
-    # 첫 번째 메시지 발송 (AI 분석, 연준 분석 및 경제 캘린더 요약)
     msg_1 = f"🌍 [글로벌 마감 시황 및 주요 경제 일정]\n\n{global_ai_analysis}"
     requests.post(url, data={"chat_id": CHAT_ID, "text": msg_1[:4000]}, timeout=15)
     
     time.sleep(2)
     
-    # 두 번째 메시지 발송 (거시 경제 지표 데이터 모음)
     msg_2 = f"📊 [주요 경제 및 금융 지표 종합]\n\n{macro_text}"
     requests.post(url, data={"chat_id": CHAT_ID, "text": msg_2[:4000]}, timeout=15)
 
