@@ -49,7 +49,7 @@ def ask_ai(prompt):
                 res = requests.post(url, headers={'Content-Type': 'application/json'}, json=payload, timeout=35).json()
                 if "candidates" in res:
                     return res['candidates'][0]['content']['parts'][0]['text'].strip()
-                break 
+                break
             except Exception:
                 time.sleep(2)
     return "AI 분석 생성 실패"
@@ -57,12 +57,21 @@ def ask_ai(prompt):
 def get_val(info, key, multiplier=1):
     try:
         val = info.get(key)
-        if val is None or str(val).strip() == "": return "N/A"
+        if val is None or str(val).strip() == "":
+            return "N/A"
         return round(float(val) * multiplier, 2)
     except:
         return "N/A"
 
-# ★ 범용 14일 RSI 계산 함수 (개별 종목 및 나스닥 지수 공용)
+def decode_html(res):
+    for enc in ("euc-kr", "cp949", "utf-8"):
+        try:
+            return res.content.decode(enc)
+        except:
+            continue
+    return res.text
+
+# 범용 14일 RSI 계산 함수 (개별 종목 및 나스닥 지수 공용)
 def get_rsi(symbol, rsi_period=14):
     try:
         t = yf.Ticker(symbol)
@@ -109,7 +118,10 @@ def get_rsi(symbol, rsi_period=14):
     except:
         return None, None
 
-headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
+headers = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Referer': 'https://finance.naver.com/'
+}
 
 # =====================================================================
 # 2. 글로벌 금융 시장 시황 및 연준(Fed) 발언 수집
@@ -118,26 +130,26 @@ global_ai_analysis = ""
 try:
     global_news_query = urllib.parse.quote("글로벌 증시 OR 미국 증시")
     global_news_url = f"https://news.google.com/rss/search?q={global_news_query}&hl=ko&gl=KR&ceid=KR:ko"
-    
+
     res = requests.get(global_news_url, headers=headers, timeout=15)
     root = ET.fromstring(res.text)
     global_raw_titles = [item.find('title').text for item in root.findall('.//channel/item')[:4]]
-    
+
     global_news_text = ""
     for t in global_raw_titles:
         clean_title = t.replace('&quot;', '"').replace('&amp;', '&')
         global_news_text += f"- {clean_title}\n"
-        
+
     if not global_news_text.strip():
         global_news_text = "최근 글로벌 주요 뉴스 없음"
 
     fed_news_query = urllib.parse.quote("Kevin Warsh OR FOMC OR Federal Reserve speech")
     fed_news_url = f"https://news.google.com/rss/search?q={fed_news_query}&hl=en-US&gl=US&ceid=US:en"
-    
+
     fed_res = requests.get(fed_news_url, headers=headers, timeout=15)
     fed_root = ET.fromstring(fed_res.text)
     fed_raw_titles = [item.find('title').text for item in fed_root.findall('.//channel/item')[:4]]
-    
+
     fed_news_text = ""
     for t in fed_raw_titles:
         clean_title = t.replace('&quot;', '"').replace('&amp;', '&')
@@ -158,12 +170,12 @@ try:
 2. 연준 의장(케빈 워시) 및 연은 총재들의 발언, 혹은 FOMC 회의 내용이 포함되어 있다면 그 숨은 의미(매파적/비둘기파적 스탠스)와 파급력을 집중 분석해 주세요.
 3. {current_time}을 기준으로, '어제'와 '오늘' 발표된 한국 및 미국의 핵심 경제 지표(PPI, CPI 등)를 명시하고, 향후 1주일간 예정된 주요 경제 지표 일정(수출입동향, 기준금리 결정 등)을 일자별, 시간별로 상세히 요약하여 하단에 포함해 주세요.
 * 주의: 마크다운 기호(*, **, #)는 절대 사용하지 말고 텍스트와 이모지만 사용하세요."""
-    
+
     global_ai_analysis = ask_ai(global_prompt)
-    if global_ai_analysis: 
+    if global_ai_analysis:
         global_ai_analysis = global_ai_analysis.replace('*', '').replace('#', '')
 except Exception as e:
-    global_ai_analysis = f"글로벌 시황 데이터 수집 지연으로 인한 생략"
+    global_ai_analysis = "글로벌 시황 데이터 수집 지연으로 인한 생략"
 
 # =====================================================================
 # 3. 개별 종목 데이터 수집, 리포트 생성 및 발송
@@ -172,7 +184,7 @@ for ticker in TICKERS:
     try:
         is_korean = ticker.endswith(".KS") or ticker.endswith(".KQ")
         currency = "₩" if is_korean else "$"
-        
+
         display_name = ticker
         price = per = f_per = pbr = roe = debt = div = "N/A"
         raw_price_num = None
@@ -180,14 +192,16 @@ for ticker in TICKERS:
         try:
             stock = yf.Ticker(ticker)
             info = stock.info if stock.info else {}
-            
+
             if is_korean:
                 code = ticker.split('.')[0]
                 try:
                     nv_url = f"https://finance.naver.com/item/main.naver?code={code}"
                     html_res = requests.get(nv_url, headers=headers, timeout=5)
-                    name_m = re.search(r'<title>(.*?)\s*:\s*네이버', html_res.text)
-                    if name_m: display_name = name_m.group(1).strip()
+                    html_decoded = decode_html(html_res)
+                    name_m = re.search(r'<title>(.*?)\s*:\s*네이버', html_decoded)
+                    if name_m:
+                        display_name = name_m.group(1).strip()
                 except:
                     pass
             else:
@@ -198,23 +212,22 @@ for ticker in TICKERS:
                 raw_price_num = float(hist['Close'].iloc[-1])
             else:
                 raw_price_num = info.get("currentPrice") or stock.fast_info.get("lastPrice")
-            
+
             if raw_price_num:
                 price = f"{int(raw_price_num):,}" if is_korean else f"{float(raw_price_num):,.2f}"
-            
+
             per = get_val(info, "trailingPE")
             f_per = get_val(info, "forwardPE")
             pbr = get_val(info, "priceToBook")
             roe = get_val(info, "returnOnEquity", 100)
             debt = get_val(info, "debtToEquity")
             div = get_val(info, "dividendYield", 100)
-        except Exception as e:
+        except Exception:
             pass
 
         if div != "N/A" and isinstance(div, (int, float)) and div > 20:
             div = "N/A (데이터 오류)"
 
-        # ★ 개별 종목 14일 RSI 계산
         stock_rsi, stock_rsi_status = get_rsi(ticker, 14)
         rsi_str = f"{stock_rsi:.2f}점 ({stock_rsi_status})" if stock_rsi is not None else "N/A"
 
@@ -225,12 +238,12 @@ for ticker in TICKERS:
         else:
             news_query = urllib.parse.quote(f"{ticker} stock")
             news_url = f"https://news.google.com/rss/search?q={news_query}&hl=en-US&gl=US&ceid=US:en"
-            
+
         try:
             res = requests.get(news_url, headers=headers, timeout=15)
             root = ET.fromstring(res.text)
             raw_titles = [item.find('title').text for item in root.findall('.//channel/item')[:3]]
-            
+
             if is_korean:
                 news_titles = raw_titles
             else:
@@ -238,18 +251,19 @@ for ticker in TICKERS:
                     raw_joined = "\n".join(raw_titles)
                     trans_prompt = f"다음 영어 기사 제목들을 번역해 줘. 부연 설명이나 원래 영어 문장은 절대 쓰지 말고, 번역된 한국어 문장만 정확히 한 줄에 하나씩 출력해.\n\n제목들:\n{raw_joined}"
                     translated = ask_ai(trans_prompt)
-                    
+
                     for line in translated.split('\n'):
                         clean_line = re.sub(r'^(?:\d+\.|\-|\*|headline\s*\d*:?|draft.*?|translation.*?|refined.*?|output.*?|input.*?|task.*?)\s*', '', line, flags=re.IGNORECASE).strip('"-*[], ')
-                        if not clean_line: continue
-                        
+                        if not clean_line:
+                            continue
+
                         if re.search(r'[가-힣]', clean_line) and not re.search(r'^(input|task|constraint|format|analysis)', clean_line, re.IGNORECASE):
                             news_titles.append(clean_line)
         except:
             pass
 
         stock_data = f"현재가: {currency}{price}\nPER: {per} (내년 예상: {f_per})\nPBR: {pbr}\nROE: {roe}%\n부채비율: {debt}%\n배당수익률: {div}%\nRSI(14일): {rsi_str}"
-        
+
         news_text = ""
         for t in news_titles[:3]:
             clean_title = t.replace('&quot;', '"').replace('&amp;', '&')
@@ -274,29 +288,31 @@ for ticker in TICKERS:
 🎯 매크로 환경 및 투자 전략
 🤖 AI 종합 평가 스코어 (반드시 1~6단계 중 하나로 명시, 예: 4단계)
 2. 가짜 뉴스를 지어내지 마세요. 주어진 팩트만 사용하세요."""
-        
-        ai_analysis = ask_ai(prompt)
-        if ai_analysis: ai_analysis = ai_analysis.replace('*', '').replace('#', '')
 
-    except Exception as e:
+        ai_analysis = ask_ai(prompt)
+        if ai_analysis:
+            ai_analysis = ai_analysis.replace('*', '').replace('#', '')
+
+    except Exception:
         display_name = ticker
         stock_data = "데이터 수집 오류 방지 (다음 종목 진행)"
         news_text = "뉴스 데이터 수집 지연"
-        ai_analysis = f"내부 처리 지연으로 분석 생략"
+        ai_analysis = "내부 처리 지연으로 분석 생략"
 
     try:
         final_message = f"⏰ [작성 일시: {current_time}]\n\n🔎 [{display_name} ({ticker})] 핵심 지표\n{stock_data}\n\n🗞️ [최신 주요 뉴스]\n{news_text}\n\n🏛️ [기관 심층 분석 리포트]\n{ai_analysis}"
-        if len(final_message) > 4000: final_message = final_message[:3900] + "\n\n(※ 내용 초과로 일부 요약됨)"
-        
+        if len(final_message) > 4000:
+            final_message = final_message[:3900] + "\n\n(※ 내용 초과로 일부 요약됨)"
+
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
         requests.post(url, data={"chat_id": CHAT_ID, "text": final_message}, timeout=15)
-    except Exception as e:
+    except Exception:
         pass
-        
+
     time.sleep(2)
 
 # =====================================================================
-# 4. 환율, 주요 자산 및 나스닥 RSI 데이터 수집
+# 4. 환율, 주요 자산 및 변동성/RSI 데이터 수집
 # =====================================================================
 def get_macro_data(symbol, multiply=1):
     try:
@@ -308,8 +324,9 @@ def get_macro_data(symbol, multiply=1):
         else:
             current = t.fast_info.get("lastPrice", 0) * multiply
             prev_close = t.fast_info.get("previousClose", current) * multiply
-            if current == 0: return None, None, None
-            
+            if current == 0:
+                return None, None, None
+
         change = current - prev_close
         change_pct = (change / prev_close) * 100 if prev_close > 0 else 0
         return current, change, change_pct
@@ -317,28 +334,38 @@ def get_macro_data(symbol, multiply=1):
         return None, None, None
 
 def get_vkospi_naver():
+    # V-KOSPI (코스피200 변동성지수, 코드 VPI200) 네이버 금융 스크래핑 보강
     try:
         url = "https://finance.naver.com/sise/sise_index.naver?code=VPI200"
         res = requests.get(url, headers=headers, timeout=10)
-        now_m = re.search(r'id="now_value">([0-9.]+)', res.text)
-        change_m = re.search(r'id="change_value_and_rate">(.*?)</span>', res.text)
-        if now_m:
-            current = float(now_m.group(1))
-            change = 0.0
-            change_pct = 0.0
-            if change_m:
-                c_text = change_m.group(1)
-                nums = re.findall(r'([0-9.]+)', c_text)
-                if len(nums) >= 2:
-                    change = float(nums[0])
-                    change_pct = float(nums[1])
-                    if "하락" in c_text or "minus" in c_text:
-                        change = -change
-                        change_pct = -change_pct
-            return current, change, change_pct
+        html = decode_html(res)
+
+        now_m = re.search(r'id=["\']now_value["\'][^>]*>([0-9.,]+)', html)
+        if not now_m:
+            now_m = re.search(r'<em[^>]*id=["\']now_value["\'][^>]*>([0-9.,]+)</em>', html)
+        if not now_m:
+            return None, None, None
+
+        current = float(now_m.group(1).replace(",", ""))
+        change = 0.0
+        change_pct = 0.0
+
+        change_m = re.search(r'id=["\']change_value_and_rate["\'][^>]*>(.*?)</', html, flags=re.DOTALL)
+        if change_m:
+            c_raw = change_m.group(1)
+            c_clean = re.sub(r'<[^>]+>', ' ', c_raw)
+            nums = re.findall(r'([0-9.,]+)', c_clean)
+            if len(nums) >= 2:
+                change = float(nums[0].replace(",", ""))
+                change_pct = float(nums[1].replace(",", ""))
+                is_down = ("하락" in c_raw) or ("minus" in c_raw.lower()) or ("nv01" in c_raw.lower())
+                if is_down:
+                    change = -abs(change)
+                    change_pct = -abs(change_pct)
+
+        return current, change, change_pct
     except:
-        pass
-    return None, None, None
+        return None, None, None
 
 def get_kr_10y_bond():
     try:
@@ -353,7 +380,8 @@ def get_kr_10y_bond():
     try:
         url = "https://finance.naver.com/marketindex/interestDailyQuote.naver?marketindexCd=IRR_GOVT10Y"
         res = requests.get(url, headers=headers, timeout=10)
-        match = re.findall(r'<td class="num">([0-9.]+)</td>', res.text)
+        html = decode_html(res)
+        match = re.findall(r'<td class="num">([0-9.]+)</td>', html)
         if len(match) >= 4:
             current = float(match[0])
             prev = float(match[3])
@@ -373,7 +401,7 @@ def get_fear_and_greed():
             score = round(data['fear_and_greed']['score'])
             prev_score = round(data['fear_and_greed']['previous_close'])
             change = score - prev_score
-            
+
             rating = data['fear_and_greed']['rating'].lower()
             rating_map = {
                 "extreme fear": "극단적 공포",
@@ -431,7 +459,7 @@ macro_text += f"금(온스당): ${gold_c:,.2f} ({gold_d:+.2f} / {gold_p:+.2f}%)\
 macro_text += f"WTI 원유: ${wti_c:,.2f} ({wti_d:+.2f} / {wti_p:+.2f}%)\n\n" if wti_c else "WTI 원유: 정보 없음\n\n"
 
 macro_text += "📉 [변동성 및 투자 심리]\n"
-macro_text += f"코스피 변동성(VKOSPI): {vkospi_c:,.2f} ({vkospi_d:+.2f} / {vkospi_p:+.2f}%)\n" if vkospi_c else "코스피 변동성: 정보 없음\n"
+macro_text += f"V-KOSPI(코스피 변동성): {vkospi_c:,.2f} ({vkospi_d:+.2f} / {vkospi_p:+.2f}%)\n" if vkospi_c else "V-KOSPI(코스피 변동성): 정보 없음\n"
 macro_text += f"VIX(미국 공포지수): {vix_c:,.2f} ({vix_d:+.2f} / {vix_p:+.2f}%)\n" if vix_c else "VIX(공포지수): 정보 없음\n"
 macro_text += f"CNN 공포·탐욕 지수: {fg_score}점 ({fg_change:+.0f} / {fg_rating})\n" if fg_score is not None else "CNN 공포·탐욕 지수: 정보 없음\n"
 macro_text += f"나스닥 RSI(14일): {nasdaq_rsi:.2f}점 ({nasdaq_rsi_status})\n" if nasdaq_rsi is not None else "나스닥 RSI(14일): 정보 없음\n"
@@ -441,14 +469,14 @@ macro_text += f"나스닥 RSI(14일): {nasdaq_rsi:.2f}점 ({nasdaq_rsi_status})\
 # =====================================================================
 try:
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    
+
     msg_1 = f"🌍 [글로벌 마감 시황 및 주요 경제 일정]\n\n{global_ai_analysis}"
     requests.post(url, data={"chat_id": CHAT_ID, "text": msg_1[:4000]}, timeout=15)
-    
+
     time.sleep(2)
-    
+
     msg_2 = f"📊 [주요 경제 및 금융 지표 종합]\n\n{macro_text}"
     requests.post(url, data={"chat_id": CHAT_ID, "text": msg_2[:4000]}, timeout=15)
 
-except Exception as e:
+except Exception:
     pass
